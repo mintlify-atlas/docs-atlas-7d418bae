@@ -128,10 +128,10 @@ If you see errors like "Model not found" or "Repository not found":
 
 If your model architecture is not supported:
 
-1. Check the [supported models](/supported-models) documentation
+1. Check the [supported models](/models/supported-models) documentation
 2. Try using `--trust-remote-code` if the model uses custom code
-3. Consider using the [Transformers fallback](/supported-models/extending/transformers-fallback)
-4. See [Adding Support for New Models](/supported-models/extending/support-new-models)
+3. Consider using the [Transformers fallback](/models/supported-models/extending/transformers-fallback)
+4. See [Adding Support for New Models](/models/supported-models/extending/support-new-models)
 
 ## Performance Issues
 
@@ -143,7 +143,7 @@ If your model architecture is not supported:
 4. **Tune chunked prefill**: Adjust `--chunked-prefill-size`
 5. **Use quantization**: Consider FP8 or INT4 quantization
 
-See [Hyperparameter Tuning](/advanced-features/hyperparameter-tuning) for detailed guidance.
+See [Hyperparameter Tuning](/optimization/performance-tuning) for detailed guidance.
 
 ### High Latency
 
@@ -186,7 +186,7 @@ If the output format is not as expected:
 1. **Check chat template**: Some models require specific templates
 2. **Verify model compatibility**: Ensure model supports the requested features
 3. **Review sampling parameters**: Check temperature, top_p, max_tokens, etc.
-4. **Use custom chat template**: See [Custom Chat Template](/references/custom-chat-template)
+4. **Use custom chat template**: See [Custom Chat Template](/backend/openai-compatible-api)
 
 ## Multi-GPU and Distributed Issues
 
@@ -208,7 +208,7 @@ For multi-node setups:
 3. **Shared filesystem**: Some features require shared storage
 4. **Synchronization**: Check clock synchronization across nodes
 
-See [Multi-Node Deployment](/references/multi-node-deployment) for details.
+See [Multi-Node Deployment](/deployment/multi-node) for details.
 
 ## Quantization Issues
 
@@ -219,7 +219,7 @@ See [Multi-Node Deployment](/references/multi-node-deployment) for details.
 3. **GPU compatibility**: FP8 requires Hopper or later GPUs
 4. **Install dependencies**: Some quantization methods need additional packages
 
-See [Quantization](/advanced-features/quantization) for supported formats.
+See [Quantization](/advanced/quantization) for supported formats.
 
 ### Accuracy Degradation
 
@@ -305,5 +305,5 @@ If you're still experiencing issues:
 
 - [FAQ](/resources/faq) - Frequently asked questions
 - [Environment Variables](/resources/environment-variables) - Configuration reference
-- [Hyperparameter Tuning](/advanced-features/hyperparameter-tuning) - Performance optimization
-- [Server Arguments](/advanced-features/server-arguments) - Command-line options
+- [Hyperparameter Tuning](/optimization/performance-tuning) - Performance optimization
+- [Server Arguments](/backend/server-arguments) - Command-line options

@@ -398,7 +398,7 @@ Control generation behavior with these common parameters:
   | `n` | int | 1 | Number of completions to generate |
   | `stream` | bool | false | Enable streaming responses |
 
-  See [Sampling Parameters](/basic-usage/sampling-params) for the complete list.
+  See [Sampling Parameters](/backend/sampling-parameters) for the complete list.
 </Accordion>
 
 ## Common Use Cases
@@ -466,7 +466,7 @@ Control generation behavior with these common parameters:
   - Use tensor parallelism for multi-GPU: `--tp 2`
   - Enable FP8 quantization: `--quantization fp8`
   - Reduce context length: `--context-length 4096`
-  - See [Hyperparameter Tuning](/advanced-features/hyperparameter-tuning) for optimization
+  - See [Performance Tuning](/optimization/performance-tuning) for optimization
 </Accordion>
 
 <Accordion title="Connection refused">
@@ -479,16 +479,16 @@ Control generation behavior with these common parameters:
 ## Next Steps
 
 <CardGroup cols={2}>
-  <Card title="Server Arguments" icon="sliders" href="/advanced-features/server-arguments">
+  <Card title="Server Arguments" icon="sliders" href="/backend/server-arguments">
     Learn about all available server configuration options
   </Card>
-  <Card title="Sampling Parameters" icon="dice" href="/basic-usage/sampling-params">
+  <Card title="Sampling Parameters" icon="dice" href="/backend/sampling-parameters">
     Control generation behavior with sampling parameters
   </Card>
-  <Card title="Model Support" icon="cube" href="/supported-models">
+  <Card title="Model Support" icon="cube" href="/models/models/supported-models">
     Browse supported models and architectures
   </Card>
-  <Card title="Production Deployment" icon="server" href="/advanced-features/observability">
+  <Card title="Production Deployment" icon="server" href="/observability/monitoring">
     Deploy SGLang in production with monitoring
   </Card>
 </CardGroup>
