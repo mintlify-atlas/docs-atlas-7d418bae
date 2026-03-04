@@ -1,0 +1,483 @@
+---
+title: Server Arguments
+description: Complete reference for SGLang server configuration options
+---
+
+## Overview
+
+This page documents all available server arguments for launching SGLang. These can be passed via command-line flags or programmatically when creating an `Engine`.
+
+## Model and Tokenizer
+
+<ParamField path="model-path" type="string" required>
+  Path to model weights. Can be a local folder or HuggingFace repo ID.
+  
+  Examples: `meta-llama/Llama-3.1-8B-Instruct`, `/local/path/to/model`
+</ParamField>
+
+<ParamField path="tokenizer-path" type="string" default="null">
+  Path to tokenizer. Defaults to `model-path` if not specified.
+</ParamField>
+
+<ParamField path="tokenizer-mode" type="string" default="auto">
+  Tokenizer mode. Options: `auto` (use fast tokenizer if available), `slow` (always use slow tokenizer).
+</ParamField>
+
+<ParamField path="skip-tokenizer-init" type="bool" default="false">
+  Skip tokenizer initialization. When enabled, you must pass `input_ids` directly to generate.
+</ParamField>
+
+<ParamField path="load-format" type="string" default="auto">
+  Model weight format to load.
+  
+  Options: `auto`, `pt`, `safetensors`, `npcache`, `dummy`, `gguf`, `bitsandbytes`, `layered`, `remote`
+</ParamField>
+
+<ParamField path="trust-remote-code" type="bool" default="false">
+  Allow custom models from HuggingFace Hub with custom modeling files.
+</ParamField>
+
+<ParamField path="context-length" type="int" default="null">
+  Maximum context length. Defaults to value from model's config.json.
+</ParamField>
+
+<ParamField path="is-embedding" type="bool" default="false">
+  Use a causal LM as an embedding model.
+</ParamField>
+
+<ParamField path="enable-multimodal" type="bool" default="false">
+  Enable multimodal functionality for vision/audio models.
+</ParamField>
+
+<ParamField path="revision" type="string" default="null">
+  Model version (branch name, tag, or commit ID) to use from HuggingFace.
+</ParamField>
+
+## HTTP Server
+
+<ParamField path="host" type="string" default="127.0.0.1">
+  Host address for the HTTP server.
+</ParamField>
+
+<ParamField path="port" type="int" default="30000">
+  Port for the HTTP server.
+</ParamField>
+
+<ParamField path="grpc-mode" type="bool" default="false">
+  Use gRPC server instead of HTTP.
+</ParamField>
+
+<ParamField path="skip-server-warmup" type="bool" default="false">
+  Skip warmup phase on server startup.
+</ParamField>
+
+<ParamField path="api-key" type="string" default="null">
+  API key for authentication. Clients must include this in the Authorization header.
+</ParamField>
+
+## Data Types and Quantization
+
+<ParamField path="dtype" type="string" default="auto">
+  Data type for model weights and activations.
+  
+  Options: `auto`, `half`, `float16`, `bfloat16`, `float`, `float32`
+</ParamField>
+
+<ParamField path="quantization" type="string" default="null">
+  Quantization method.
+  
+  Options: `awq`, `fp8`, `gptq`, `marlin`, `gptq_marlin`, `awq_marlin`, `bitsandbytes`, `gguf`
+</ParamField>
+
+<ParamField path="kv-cache-dtype" type="string" default="auto">
+  KV cache data type.
+  
+  Options: `auto`, `fp8_e5m2`, `fp8_e4m3`, `bf16`, `bfloat16`, `fp4_e2m1`
+</ParamField>
+
+<ParamField path="enable-fp32-lm-head" type="bool" default="false">
+  Use FP32 precision for language model head (logits).
+</ParamField>
+
+## Memory and Scheduling
+
+<ParamField path="mem-fraction-static" type="float" default="auto">
+  Fraction of GPU memory to allocate for static usage (model weights + KV cache).
+  
+  Automatically calculated based on GPU memory and configuration if not set.
+</ParamField>
+
+<ParamField path="max-running-requests" type="int" default="null">
+  Maximum number of requests being processed concurrently.
+</ParamField>
+
+<ParamField path="max-queued-requests" type="int" default="null">
+  Maximum number of requests in the queue.
+</ParamField>
+
+<ParamField path="max-total-tokens" type="int" default="null">
+  Maximum total tokens in KV cache pool. Limits memory usage.
+</ParamField>
+
+<ParamField path="chunked-prefill-size" type="int" default="auto">
+  Maximum tokens to process in a single prefill batch.
+  
+  Automatically set based on GPU memory. Larger values improve throughput but require more memory.
+</ParamField>
+
+<ParamField path="enable-dynamic-chunking" type="bool" default="false">
+  Enable dynamic chunking for variable-length prefill batches.
+</ParamField>
+
+<ParamField path="max-prefill-tokens" type="int" default="16384">
+  Maximum tokens allowed in a single prefill request.
+</ParamField>
+
+<ParamField path="schedule-policy" type="string" default="fcfs">
+  Request scheduling policy. Options: `fcfs` (first-come-first-serve), `lpm` (longest-prefix-match)
+</ParamField>
+
+<ParamField path="enable-priority-scheduling" type="bool" default="false">
+  Enable priority-based scheduling. Requests can specify a priority value.
+</ParamField>
+
+## Parallelism
+
+<ParamField path="tp-size" type="int" default="1">
+  Tensor parallelism size. Split model across this many GPUs.
+</ParamField>
+
+<ParamField path="dp-size" type="int" default="1">
+  Data parallelism size. Run this many independent replicas.
+</ParamField>
+
+<ParamField path="pp-size" type="int" default="1">
+  Pipeline parallelism size. Distribute model layers across this many stages.
+</ParamField>
+
+<ParamField path="load-balance-method" type="string" default="auto">
+  Load balancing method for data parallelism.
+  
+  Options: `auto`, `round_robin`, `shortest_queue`, `follow_bootstrap_room`
+</ParamField>
+
+<ParamField path="ep-size" type="int" default="1">
+  Expert parallelism size for MoE models.
+</ParamField>
+
+## Multi-Node
+
+<ParamField path="nnodes" type="int" default="1">
+  Number of nodes for distributed serving.
+</ParamField>
+
+<ParamField path="node-rank" type="int" default="0">
+  Rank of this node (0 to nnodes-1).
+</ParamField>
+
+<ParamField path="dist-init-addr" type="string" default="null">
+  Distributed initialization address. Format: `host:port`
+  
+  Example: `192.168.1.100:5000`
+</ParamField>
+
+## CUDA Graph Optimization
+
+<ParamField path="cuda-graph-max-bs" type="int" default="auto">
+  Maximum batch size for CUDA graph capture.
+  
+  Automatically set based on GPU memory. Higher values enable larger batches but use more memory.
+</ParamField>
+
+<ParamField path="disable-cuda-graph" type="bool" default="false">
+  Disable CUDA graph optimization.
+</ParamField>
+
+<ParamField path="disable-cuda-graph-padding" type="bool" default="false">
+  Disable padding in CUDA graph batch sizes.
+</ParamField>
+
+## Cache Configuration
+
+<ParamField path="disable-radix-cache" type="bool" default="false">
+  Disable radix attention cache (prefix caching).
+</ParamField>
+
+<ParamField path="enable-cache-report" type="bool" default="false">
+  Include cache hit rate statistics in API responses.
+</ParamField>
+
+<ParamField path="radix-eviction-policy" type="string" default="lru">
+  Eviction policy for radix cache. Options: `lru` (least recently used), `lfu` (least frequently used)
+</ParamField>
+
+## Attention Backend
+
+<ParamField path="attention-backend" type="string" default="null">
+  Attention mechanism backend.
+  
+  Options: `flashinfer`, `triton`, `torch_native`, `fa3`, `fa4`, `flex_attention`
+  
+  Automatically selected based on hardware if not specified.
+</ParamField>
+
+<ParamField path="prefill-attention-backend" type="string" default="null">
+  Separate attention backend for prefill phase.
+</ParamField>
+
+<ParamField path="decode-attention-backend" type="string" default="null">
+  Separate attention backend for decode phase.
+</ParamField>
+
+<ParamField path="sampling-backend" type="string" default="null">
+  Sampling backend. Options: `flashinfer`, `pytorch`
+</ParamField>
+
+## LoRA Adapters
+
+<ParamField path="enable-lora" type="bool" default="false">
+  Enable LoRA adapter support.
+</ParamField>
+
+<ParamField path="max-lora-rank" type="int" default="null">
+  Maximum LoRA rank to support.
+</ParamField>
+
+<ParamField path="lora-paths" type="array[string]" default="null">
+  Paths to LoRA adapters to load at startup.
+</ParamField>
+
+<ParamField path="max-loras-per-batch" type="int" default="8">
+  Maximum number of different LoRA adapters in a single batch.
+</ParamField>
+
+<ParamField path="lora-backend" type="string" default="csgmv">
+  LoRA computation backend. Options: `triton`, `csgmv`, `torch_native`
+</ParamField>
+
+## Speculative Decoding
+
+<ParamField path="speculative-algorithm" type="string" default="null">
+  Speculative decoding algorithm. Options: `EAGLE`, `STANDALONE`, `NGRAM`
+</ParamField>
+
+<ParamField path="speculative-draft-model-path" type="string" default="null">
+  Path to draft model for speculative decoding.
+</ParamField>
+
+<ParamField path="speculative-num-steps" type="int" default="null">
+  Number of speculative steps.
+</ParamField>
+
+<ParamField path="speculative-num-draft-tokens" type="int" default="null">
+  Number of draft tokens per step.
+</ParamField>
+
+## Disaggregation
+
+<ParamField path="disaggregation-mode" type="string" default="null">
+  Prefill-decode disaggregation mode.
+  
+  Options: `null` (no disaggregation), `prefill` (prefill server), `decode` (decode server)
+</ParamField>
+
+<ParamField path="disaggregation-transfer-backend" type="string" default="mooncake">
+  Transfer backend for PD disaggregation. Options: `mooncake`, `nixl`, `fake`
+</ParamField>
+
+<ParamField path="disaggregation-ib-device" type="string" default="null">
+  InfiniBand device(s) for disaggregation. Format: `mlx5_0` or `mlx5_0,mlx5_1`
+</ParamField>
+
+## Logging and Monitoring
+
+<ParamField path="log-level" type="string" default="info">
+  Logging level. Options: `debug`, `info`, `warning`, `error`
+</ParamField>
+
+<ParamField path="log-requests" type="bool" default="false">
+  Log all incoming requests and responses.
+</ParamField>
+
+<ParamField path="enable-metrics" type="bool" default="false">
+  Enable Prometheus metrics at `/metrics` endpoint.
+</ParamField>
+
+<ParamField path="show-time-cost" type="bool" default="false">
+  Show time cost breakdown in responses.
+</ParamField>
+
+## Advanced Options
+
+<ParamField path="random-seed" type="int" default="null">
+  Random seed for reproducibility.
+</ParamField>
+
+<ParamField path="stream-interval" type="int" default="1">
+  Token interval for streaming responses.
+</ParamField>
+
+<ParamField path="watchdog-timeout" type="float" default="300">
+  Watchdog timeout in seconds. Kill worker if no heartbeat.
+</ParamField>
+
+<ParamField path="download-dir" type="string" default="null">
+  Directory for downloading models from HuggingFace.
+</ParamField>
+
+<ParamField path="base-gpu-id" type="int" default="0">
+  Starting GPU ID for multi-GPU setups.
+</ParamField>
+
+<ParamField path="enable-torch-compile" type="bool" default="false">
+  Enable PyTorch compilation for improved performance.
+</ParamField>
+
+<ParamField path="enable-p2p-check" type="bool" default="false">
+  Enable peer-to-peer GPU connectivity check.
+</ParamField>
+
+<ParamField path="enable-deterministic-inference" type="bool" default="false">
+  Enable deterministic inference for reproducible outputs.
+</ParamField>
+
+## Model-Specific Options
+
+<ParamField path="served-model-name" type="string" default="null">
+  Name to serve the model as. Defaults to model path.
+</ParamField>
+
+<ParamField path="chat-template" type="string" default="null">
+  Custom chat template (Jinja2 format).
+</ParamField>
+
+<ParamField path="completion-template" type="string" default="null">
+  Custom completion template.
+</ParamField>
+
+<ParamField path="tool-call-parser" type="string" default="null">
+  Tool call parser for function calling. Options: `hermes`, `qwen`, `glm`
+</ParamField>
+
+<ParamField path="reasoning-parser" type="string" default="null">
+  Reasoning parser for o1-style models.
+</ParamField>
+
+## Example Configurations
+
+### Small Model (8B)
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --host 0.0.0.0 \
+  --port 30000 \
+  --mem-fraction-static 0.8
+```
+
+### Large Model with TP (70B)
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 4 \
+  --mem-fraction-static 0.85 \
+  --chunked-prefill-size 8192 \
+  --cuda-graph-max-bs 256
+```
+
+### Quantized Model
+
+```bash
+sglang serve \
+  --model-path TheBloke/Llama-2-13B-AWQ \
+  --quantization awq \
+  --dtype half \
+  --kv-cache-dtype fp8_e4m3
+```
+
+### Multi-Node Setup
+
+```bash
+# Node 0
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 8 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --dist-init-addr 192.168.1.100:5000
+
+# Node 1
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 8 \
+  --nnodes 2 \
+  --node-rank 1 \
+  --dist-init-addr 192.168.1.100:5000
+```
+
+### Data Parallelism
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --dp-size 4 \
+  --load-balance-method round_robin
+```
+
+### Disaggregated Setup
+
+```bash
+# Prefill server
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 4 \
+  --disaggregation-mode prefill \
+  --disaggregation-transfer-backend mooncake
+
+# Decode server
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 4 \
+  --disaggregation-mode decode \
+  --disaggregation-transfer-backend mooncake
+```
+
+### Production Server
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 4 \
+  --host 0.0.0.0 \
+  --port 30000 \
+  --api-key your-secret-key \
+  --enable-metrics \
+  --log-level info \
+  --log-requests \
+  --mem-fraction-static 0.85 \
+  --cuda-graph-max-bs 256
+```
+
+## Python API
+
+All arguments can be used when creating an `Engine`:
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-70B-Instruct",
+    tp_size=4,
+    mem_fraction_static=0.85,
+    trust_remote_code=True,
+    dtype="bfloat16",
+    log_level="info"
+)
+```
+
+## See Also
+
+- [Launch Server](/backend/launch-server) - Server launch guide
+- [Native API](/backend/native-api) - Python API usage
+- [Sampling Parameters](/backend/sampling-parameters) - Generation control

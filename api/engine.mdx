@@ -1,0 +1,408 @@
+---
+title: Engine
+description: Python API for SGLang inference engine
+---
+
+# Engine
+
+The `Engine` class is the main entry point to the SGLang inference engine. It provides a Python API for text generation and embedding tasks.
+
+## Architecture
+
+The engine consists of three components:
+
+1. **TokenizerManager**: Tokenizes requests and sends them to the scheduler
+2. **Scheduler** (subprocess): Receives requests, schedules batches, forwards them, and sends output tokens to the detokenizer
+3. **DetokenizerManager** (subprocess): Detokenizes output tokens and sends results back to the tokenizer manager
+
+<Note>
+- The HTTP server, Engine, and TokenizerManager all run in the main process
+- Inter-process communication is done through IPC via the ZMQ library
+</Note>
+
+## Initialization
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=1
+)
+```
+
+### Constructor Parameters
+
+<ParamField path="model_path" type="str" required>
+  Path to the model on Hugging Face or local filesystem.
+</ParamField>
+
+<ParamField path="tokenizer_path" type="Optional[str]" default="None">
+  Path to the tokenizer. Defaults to `model_path` if not specified.
+</ParamField>
+
+<ParamField path="tp_size" type="int" default="1">
+  Tensor parallelism size. Number of GPUs to use for model parallelism.
+</ParamField>
+
+<ParamField path="trust_remote_code" type="bool" default="False">
+  Whether to trust remote code when loading the model.
+</ParamField>
+
+<ParamField path="context_length" type="Optional[int]" default="None">
+  Maximum context length. Auto-detected from model config if not specified.
+</ParamField>
+
+<ParamField path="mem_fraction_static" type="Optional[float]" default="None">
+  Fraction of GPU memory to use for static allocation (model weights + KV cache).
+</ParamField>
+
+<ParamField path="log_level" type="str" default="error">
+  Logging level. Options: "debug", "info", "warning", "error".
+</ParamField>
+
+For the complete list of parameters, see [ServerArgs](/api/server-args).
+
+## Methods
+
+### generate
+
+Generate text completions synchronously.
+
+```python
+response = engine.generate(
+    prompt="Once upon a time",
+    sampling_params={"temperature": 0.8, "max_new_tokens": 128}
+)
+print(response["text"])
+```
+
+<ParamField path="prompt" type="Optional[Union[List[str], str]]">
+  Input prompt(s). Can be a single string or list of strings for batching.
+</ParamField>
+
+<ParamField path="sampling_params" type="Optional[Union[List[Dict], Dict]]">
+  Sampling parameters. See [SamplingParams](/api/sampling-params) for details.
+</ParamField>
+
+<ParamField path="input_ids" type="Optional[Union[List[List[int]], List[int]]]">
+  Token IDs for text. Use either `prompt` or `input_ids`, not both.
+</ParamField>
+
+<ParamField path="image_data" type="Optional[MultimodalDataInputFormat]">
+  Image input(s) for multimodal models. Can be:
+  - Single image (file path, URL, or base64 string)
+  - List of images (one per request)
+  - List of lists of images (multiple images per request)
+</ParamField>
+
+<ParamField path="return_logprob" type="Optional[Union[List[bool], bool]]" default="False">
+  Whether to return log probabilities.
+</ParamField>
+
+<ParamField path="stream" type="bool" default="False">
+  Whether to stream the response token by token.
+</ParamField>
+
+<ParamField path="routed_dp_rank" type="Optional[int]" default="None">
+  Data parallel rank to route the request to when using data parallelism.
+</ParamField>
+
+**Returns:** `Union[Dict, Iterator[Dict]]` - Response dictionary or iterator if streaming
+
+**Response Format:**
+```python
+{
+    "text": "generated text",
+    "meta_info": {
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "finish_reason": "stop"
+    }
+}
+```
+
+### async_generate
+
+Generate text completions asynchronously.
+
+```python
+import asyncio
+
+async def generate_text():
+    response = await engine.async_generate(
+        prompt="Tell me a story",
+        sampling_params={"temperature": 0.8, "max_new_tokens": 256}
+    )
+    print(response["text"])
+
+asyncio.run(generate_text())
+```
+
+<Note>
+Parameters are identical to `generate()`. Returns `Union[Dict, AsyncIterator[Dict]]` for streaming.
+</Note>
+
+### encode
+
+Generate embeddings for input text.
+
+```python
+embeddings = engine.encode(
+    prompt="Hello, world!"
+)
+print(embeddings["embedding"])
+```
+
+<ParamField path="prompt" type="Union[str, List[str], List[Dict], List[List[Dict]]]" required>
+  Text or messages to encode.
+</ParamField>
+
+<ParamField path="image_data" type="Optional[MultimodalDataInputFormat]">
+  Image data for multimodal embedding models.
+</ParamField>
+
+<ParamField path="dimensions" type="Optional[int]">
+  Output embedding dimensions (if model supports dimensionality reduction).
+</ParamField>
+
+**Returns:** `Dict` - Embeddings dictionary
+
+### async_encode
+
+Asynchronous version of `encode()`.
+
+```python
+async def get_embeddings():
+    embeddings = await engine.async_encode(
+        prompt="Hello, world!"
+    )
+    print(embeddings["embedding"])
+```
+
+### score
+
+Score the probability of label tokens appearing after (query + item) pairs.
+
+```python
+result = engine.score(
+    query="Is the following city the capital of France?",
+    items=["Paris", "London", "Berlin"],
+    label_token_ids=[2332, 1223],  # Token IDs for "Yes" and "No"
+    apply_softmax=True
+)
+print(result.scores)  # [[0.9, 0.1], [0.2, 0.8], [0.1, 0.9]]
+```
+
+<ParamField path="query" type="Optional[Union[str, List[int]]]" required>
+  Query text or pre-tokenized token IDs.
+</ParamField>
+
+<ParamField path="items" type="Optional[Union[str, List[str], List[List[int]]]]" required>
+  Item text(s) or pre-tokenized token IDs to score.
+</ParamField>
+
+<ParamField path="label_token_ids" type="Optional[List[int]]">
+  List of token IDs to compute probabilities for.
+</ParamField>
+
+<ParamField path="apply_softmax" type="bool" default="False">
+  Whether to normalize probabilities using softmax.
+</ParamField>
+
+<ParamField path="item_first" type="bool" default="False">
+  If True, prepend items to query. Otherwise append items to query.
+</ParamField>
+
+**Returns:** `ScoreResult` with `scores` and `prompt_tokens` fields.
+
+### Session Management
+
+#### open_session
+
+Open a session for multi-turn conversation with shared context.
+
+```python
+session_id = engine.open_session(
+    capacity_of_str_len=10000,
+    streaming=True,
+    timeout=300.0
+)
+```
+
+<ParamField path="capacity_of_str_len" type="int" required>
+  Maximum string length capacity for the session.
+</ParamField>
+
+<ParamField path="session_id" type="Optional[str]">
+  Optional session ID. A UUID is generated if not provided.
+</ParamField>
+
+<ParamField path="streaming" type="bool" default="False">
+  Use low-overhead path for realtime streaming (append-only mode).
+</ParamField>
+
+<ParamField path="timeout" type="Optional[float]">
+  Auto-close session after this many seconds of inactivity.
+</ParamField>
+
+**Returns:** `str` - The session ID
+
+#### close_session
+
+Close a session and release its resources.
+
+```python
+engine.close_session(session_id="my-session")
+```
+
+### Weight Management
+
+#### update_weights_from_disk
+
+Update model weights from disk without restarting the engine.
+
+```python
+engine.update_weights_from_disk(
+    model_path="/path/to/new/weights",
+    load_format="safetensors"
+)
+```
+
+#### load_lora_adapter
+
+Load a LoRA adapter without restarting the engine.
+
+```python
+engine.load_lora_adapter(
+    lora_name="my_adapter",
+    lora_path="/path/to/lora",
+    pinned=True
+)
+```
+
+#### unload_lora_adapter
+
+Unload a LoRA adapter.
+
+```python
+engine.unload_lora_adapter(lora_name="my_adapter")
+```
+
+### Profiling and Monitoring
+
+#### get_server_info
+
+Get server configuration and runtime information.
+
+```python
+info = engine.get_server_info()
+print(info["model_path"])
+print(info["internal_states"])
+```
+
+#### start_profile / stop_profile
+
+Start and stop performance profiling.
+
+```python
+engine.start_profile()
+# Run your workload
+engine.stop_profile()
+```
+
+#### flush_cache
+
+Flush the KV cache.
+
+```python
+engine.flush_cache()
+```
+
+### Shutdown
+
+#### shutdown
+
+Shutdown the engine and all subprocesses.
+
+```python
+engine.shutdown()
+```
+
+<Note>
+You can also use the engine as a context manager:
+
+```python
+with Engine(model_path="meta-llama/Llama-3.1-8B-Instruct") as engine:
+    response = engine.generate(prompt="Hello")
+    print(response["text"])
+# Engine is automatically shut down
+```
+</Note>
+
+## Usage Examples
+
+### Basic Text Generation
+
+```python
+from sglang import Engine
+
+engine = Engine(model_path="meta-llama/Llama-3.1-8B-Instruct")
+
+response = engine.generate(
+    prompt="What is the capital of France?",
+    sampling_params={"temperature": 0.0, "max_new_tokens": 32}
+)
+
+print(response["text"])
+engine.shutdown()
+```
+
+### Streaming Generation
+
+```python
+response = engine.generate(
+    prompt="Write a short story",
+    sampling_params={"temperature": 0.8, "max_new_tokens": 256},
+    stream=True
+)
+
+for chunk in response:
+    print(chunk["text"], end="", flush=True)
+```
+
+### Batch Generation
+
+```python
+prompts = [
+    "What is AI?",
+    "Explain quantum computing",
+    "What is machine learning?"
+]
+
+responses = engine.generate(
+    prompt=prompts,
+    sampling_params={"temperature": 0.7, "max_new_tokens": 100}
+)
+
+for response in responses:
+    print(response["text"])
+```
+
+### Multimodal Generation
+
+```python
+response = engine.generate(
+    prompt="Describe this image",
+    image_data="https://example.com/image.jpg",
+    sampling_params={"max_new_tokens": 128}
+)
+
+print(response["text"])
+```
+
+## See Also
+
+- [Runtime](/api/runtime) - HTTP server wrapper for the Engine
+- [SamplingParams](/api/sampling-params) - Sampling parameter configuration
+- [ServerArgs](/api/server-args) - Complete server configuration options

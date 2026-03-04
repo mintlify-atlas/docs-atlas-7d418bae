@@ -1,0 +1,231 @@
+---
+title: "gen()"
+description: "Generate text from the language model"
+---
+
+## Overview
+
+The `gen()` function generates text from the language model at the current position in your prompt program.
+
+## Syntax
+
+```python
+sgl.gen(name, max_tokens=128, temperature=1.0, ...)
+```
+
+## Parameters
+
+<ParamField path="name" type="str" optional>
+  Variable name to store the generated text. Access with `state[name]`.
+</ParamField>
+
+<ParamField path="max_tokens" type="int" default="128">
+  Maximum number of tokens to generate.
+</ParamField>
+
+<ParamField path="min_tokens" type="int" optional>
+  Minimum number of tokens to generate.
+</ParamField>
+
+<ParamField path="temperature" type="float" default="1.0">
+  Sampling temperature. Higher values (e.g., 1.5) make output more random, lower values (e.g., 0.2) make it more deterministic.
+</ParamField>
+
+<ParamField path="top_p" type="float" default="1.0">
+  Nucleus sampling threshold. Only tokens with cumulative probability up to `top_p` are considered.
+</ParamField>
+
+<ParamField path="top_k" type="int" default="-1">
+  Top-k sampling. Only the top `k` most likely tokens are considered. -1 means disabled.
+</ParamField>
+
+<ParamField path="min_p" type="float" default="0.0">
+  Minimum probability threshold for token sampling.
+</ParamField>
+
+<ParamField path="stop" type="str | List[str]" optional>
+  Stop sequences. Generation stops when any of these strings are generated.
+</ParamField>
+
+<ParamField path="stop_token_ids" type="List[int]" optional>
+  Token IDs that trigger generation to stop.
+</ParamField>
+
+<ParamField path="stop_regex" type="str | List[str]" optional>
+  Regular expressions that trigger generation to stop when matched.
+</ParamField>
+
+<ParamField path="frequency_penalty" type="float" default="0.0">
+  Penalty for token frequency. Positive values reduce repetition.
+</ParamField>
+
+<ParamField path="presence_penalty" type="float" default="0.0">
+  Penalty for token presence. Positive values encourage topic diversity.
+</ParamField>
+
+<ParamField path="ignore_eos" type="bool" default="false">
+  Whether to ignore end-of-sequence tokens.
+</ParamField>
+
+<ParamField path="regex" type="str" optional>
+  Regular expression constraint. Generated text must match this pattern.
+</ParamField>
+
+<ParamField path="json_schema" type="str" optional>
+  JSON schema constraint. Generated text must be valid JSON matching this schema.
+</ParamField>
+
+<ParamField path="choices" type="List[str]" optional>
+  If provided, `gen()` behaves like `select()` and chooses from these options.
+</ParamField>
+
+<ParamField path="return_logprob" type="bool" optional>
+  Whether to return log probabilities for generated tokens.
+</ParamField>
+
+<ParamField path="logprob_start_len" type="int" optional>
+  Start position for computing log probabilities.
+</ParamField>
+
+<ParamField path="top_logprobs_num" type="int" optional>
+  Number of top log probabilities to return per token.
+</ParamField>
+
+## Usage
+
+### Basic Generation
+
+```python
+import sglang as sgl
+
+@sgl.function
+def simple_gen(s):
+    s += "The capital of France is"
+    s += sgl.gen("answer", max_tokens=10)
+
+state = simple_gen.run()
+print(state["answer"])  # " Paris"
+```
+
+### With Stop Sequences
+
+```python
+@sgl.function
+def generate_list(s):
+    s += "List three colors:\n"
+    s += sgl.gen("colors", max_tokens=50, stop="\n\n")
+
+state = generate_list.run()
+print(state["colors"])
+```
+
+### Temperature Control
+
+```python
+@sgl.function
+def creative_writing(s, prompt):
+    s += prompt
+    s += sgl.gen("story", max_tokens=200, temperature=1.5)  # More creative
+
+@sgl.function
+def factual_qa(s, question):
+    s += question
+    s += sgl.gen("answer", max_tokens=50, temperature=0.0)  # Deterministic
+```
+
+### Constrained Generation with Regex
+
+```python
+@sgl.function
+def generate_email(s):
+    s += "Generate an email address:\n"
+    s += sgl.gen(
+        "email",
+        max_tokens=30,
+        regex=r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+    )
+```
+
+### JSON Schema Constraint
+
+```python
+import json
+
+@sgl.function
+def generate_person(s):
+    schema = json.dumps({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "age": {"type": "integer"},
+            "email": {"type": "string"}
+        },
+        "required": ["name", "age"]
+    })
+    
+    s += "Generate a person:\n"
+    s += sgl.gen("person", max_tokens=100, json_schema=schema)
+
+state = generate_person.run()
+person = json.loads(state["person"])
+print(person["name"], person["age"])
+```
+
+## Specialized Variants
+
+### gen_int()
+
+Generates an integer value.
+
+```python
+sgl.gen_int(name, max_tokens=10, ...)
+```
+
+Automatically constrains generation to match integer format (digits with optional +/- prefix).
+
+**Example:**
+```python
+@sgl.function
+def math_problem(s):
+    s += "What is 25 + 17? Answer: "
+    s += sgl.gen_int("result", max_tokens=5)
+
+state = math_problem.run()
+print(int(state["result"]))  # 42
+```
+
+### gen_string()
+
+Generates a string value.
+
+```python
+sgl.gen_string(name, max_tokens=50, ...)
+```
+
+Automatically constrains generation to match quoted string format.
+
+**Example:**
+```python
+@sgl.function
+def extract_name(s, text):
+    s += f"Extract the name from: {text}\nName: "
+    s += sgl.gen_string("name", max_tokens=20)
+
+state = extract_name.run(text="Hello, I'm Alice.")
+print(state["name"])  # "Alice"
+```
+
+## Accessing Generated Content
+
+The generated text is stored in the state object and can be accessed by name:
+
+```python
+state = my_function.run()
+generated_text = state["variable_name"]
+```
+
+## See Also
+
+- [@sglang.function](/api/frontend/function) - Define prompt programs
+- [select()](/api/frontend/select) - Choose from predefined options
+- [Sampling Parameters](/backend/sampling_params) - Detailed parameter documentation

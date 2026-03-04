@@ -1,0 +1,643 @@
+---
+title: Cloud Platform Deployment
+description: Deploy SGLang on AWS, Google Cloud, Azure, and other cloud platforms
+---
+
+## Overview
+
+SGLang supports deployment across major cloud platforms, leveraging managed services for Kubernetes, GPUs, and TPUs. This guide covers platform-specific configurations and best practices.
+
+## Amazon Web Services (AWS)
+
+### AWS SageMaker
+
+AWS SageMaker provides managed inference with built-in SGLang container support.
+
+#### Prerequisites
+
+- AWS account with SageMaker access
+- IAM role with SageMaker permissions
+- AWS CLI configured
+- SGLang container on Amazon ECR
+
+#### Build and Push Container
+
+```bash
+# Set AWS configuration
+export AWS_ACCOUNT="<YOUR_AWS_ACCOUNT>"
+export AWS_REGION="<YOUR_AWS_REGION>"
+export ECR_REGISTRY="${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+# Build SageMaker container
+docker build -f docker/sagemaker.Dockerfile -t sglang-sagemaker .
+
+# Tag for ECR
+docker tag sglang-sagemaker:latest ${ECR_REGISTRY}/sglang-sagemaker:latest
+
+# Login to ECR
+aws ecr get-login-password --region ${AWS_REGION} | \
+  docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+# Create repository if it doesn't exist
+aws ecr create-repository --repository-name sglang-sagemaker --region ${AWS_REGION}
+
+# Push image
+docker push ${ECR_REGISTRY}/sglang-sagemaker:latest
+```
+
+#### Deploy Model Endpoint
+
+Use the SageMaker Python SDK:
+
+```python
+import sagemaker
+from sagemaker import Model
+
+# Initialize SageMaker session
+sagemaker_session = sagemaker.Session()
+role = sagemaker.get_execution_role()
+
+# Define model
+model = Model(
+    image_uri=f"{ECR_REGISTRY}/sglang-sagemaker:latest",
+    role=role,
+    sagemaker_session=sagemaker_session,
+    env={
+        "SM_SGLANG_MODEL_PATH": "meta-llama/Llama-3.1-8B-Instruct",
+        "SM_SGLANG_HOST": "0.0.0.0",
+        "SM_SGLANG_PORT": "8080",
+        "SM_SGLANG_TP": "1",
+        "HF_TOKEN": "<your_hf_token>"
+    }
+)
+
+# Deploy endpoint
+predictor = model.deploy(
+    instance_type="ml.g5.xlarge",
+    initial_instance_count=1,
+    endpoint_name="sglang-llama-endpoint"
+)
+```
+
+#### SageMaker Environment Variables
+
+The SageMaker container uses environment variables with the `SM_SGLANG_` prefix:
+
+```bash
+SM_SGLANG_MODEL_PATH=/opt/ml/model  # Default model path
+SM_SGLANG_HOST=0.0.0.0              # Server host
+SM_SGLANG_PORT=8080                 # Server port
+SM_SGLANG_TP=1                      # Tensor parallelism
+```
+
+All SGLang launch arguments can be set using this pattern:
+
+```bash
+SM_SGLANG_<ARGUMENT_NAME>=<value>
+# Example: --max-running-requests becomes
+SM_SGLANG_MAX_RUNNING_REQUESTS=32
+```
+
+#### Query SageMaker Endpoint
+
+```python
+import json
+import boto3
+
+runtime = boto3.client("sagemaker-runtime")
+
+response = runtime.invoke_endpoint(
+    EndpointName="sglang-llama-endpoint",
+    ContentType="application/json",
+    Body=json.dumps({
+        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "messages": [
+            {"role": "user", "content": "What is the capital of France?"}
+        ],
+        "max_tokens": 100
+    })
+)
+
+result = json.loads(response["Body"].read())
+print(result)
+```
+
+#### AWS Deep Learning Containers
+
+AWS maintains official SGLang containers with security patches:
+
+```bash
+# Check available images
+aws ecr describe-images \
+  --repository-name sglang \
+  --registry-id <AWS_DLC_ACCOUNT> \
+  --region ${AWS_REGION}
+```
+
+See [AWS SGLang DLCs](https://github.com/aws/deep-learning-containers/blob/master/available_images.md#sglang-containers) for the latest images.
+
+### Amazon EKS
+
+Deploy SGLang on Elastic Kubernetes Service:
+
+#### Create EKS Cluster
+
+```bash
+# Install eksctl
+curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+sudo mv /tmp/eksctl /usr/local/bin
+
+# Create cluster with GPU nodes
+eksctl create cluster \
+  --name sglang-cluster \
+  --region us-west-2 \
+  --nodegroup-name gpu-nodes \
+  --node-type p3.2xlarge \
+  --nodes 2 \
+  --nodes-min 1 \
+  --nodes-max 4
+```
+
+#### Install NVIDIA Device Plugin
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.0/nvidia-device-plugin.yml
+```
+
+#### Deploy SGLang
+
+Follow the [Kubernetes deployment guide](/deployment/kubernetes) with EKS-specific configurations:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-service
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+spec:
+  type: LoadBalancer
+  selector:
+    app: sglang
+  ports:
+    - port: 80
+      targetPort: 30000
+```
+
+### AWS EC2
+
+Direct deployment on EC2 GPU instances:
+
+#### Launch GPU Instance
+
+```bash
+# Launch p3.2xlarge instance with NVIDIA Deep Learning AMI
+aws ec2 run-instances \
+  --image-id ami-0c55b159cbfafe1f0 \
+  --instance-type p3.2xlarge \
+  --key-name your-key-pair \
+  --security-groups sglang-sg \
+  --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize=200}'
+```
+
+#### Install and Run SGLang
+
+```bash
+# SSH into instance
+ssh -i your-key.pem ubuntu@<instance-ip>
+
+# Pull and run Docker container
+docker pull lmsysorg/sglang:latest
+docker run -d --gpus all -p 30000:30000 \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --host 0.0.0.0 --port 30000
+```
+
+## Google Cloud Platform (GCP)
+
+### Google Kubernetes Engine (GKE)
+
+#### Create GKE Cluster with GPUs
+
+```bash
+# Create cluster
+gcloud container clusters create sglang-cluster \
+  --zone us-central1-a \
+  --machine-type n1-standard-8 \
+  --accelerator type=nvidia-tesla-v100,count=1 \
+  --num-nodes 2 \
+  --enable-autoscaling \
+  --min-nodes 1 \
+  --max-nodes 4
+
+# Install NVIDIA driver
+kubectl apply -f https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/nvidia-driver-installer/cos/daemonset-preloaded-latest.yaml
+```
+
+#### Deploy SGLang on GKE
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sglang-gke
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sglang
+  template:
+    metadata:
+      labels:
+        app: sglang
+    spec:
+      containers:
+      - name: sglang
+        image: lmsysorg/sglang:latest
+        command:
+        - python3
+        - -m
+        - sglang.launch_server
+        - --model-path
+        - meta-llama/Llama-3.1-8B-Instruct
+        - --host
+        - 0.0.0.0
+        - --port
+        - "30000"
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+        volumeMounts:
+        - name: cache
+          mountPath: /root/.cache
+      volumes:
+      - name: cache
+        emptyDir: {}
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-tesla-v100
+```
+
+### Google Cloud TPU
+
+SGLang supports TPU inference through the JAX backend:
+
+#### Prerequisites
+
+- TPU v5e, v6e, or v7 instance
+- SGLang-JAX installation
+
+#### Using SkyPilot
+
+```yaml
+# sky-tpu.yaml
+resources:
+  cloud: gcp
+  accelerators: tpu-v5e-8
+  disk_size: 256
+
+setup: |
+  pip install "sglang-jax[tpu]"
+
+run: |
+  python -m sglang_jax.launch_server \
+    --model meta-llama/Llama-3.1-8B-Instruct \
+    --host 0.0.0.0 \
+    --port 30000
+```
+
+Deploy with SkyPilot:
+
+```bash
+# Install SkyPilot
+pip install skypilot-nightly[gcp]
+
+# Configure GCP access
+gcloud auth application-default login
+
+# Launch
+sky launch -c tpu-cluster sky-tpu.yaml
+
+# Check status
+sky status tpu-cluster
+```
+
+#### Direct TPU VM Setup
+
+```bash
+# Create TPU VM
+gcloud compute tpus tpu-vm create sglang-tpu \
+  --zone=us-central2-b \
+  --accelerator-type=v5litepod-8 \
+  --version=tpu-ubuntu2204-base
+
+# SSH into TPU VM
+gcloud compute tpus tpu-vm ssh sglang-tpu --zone=us-central2-b
+
+# Install SGLang-JAX
+pip install "sglang-jax[tpu]"
+
+# Launch server
+python -m sglang_jax.launch_server \
+  --model meta-llama/Llama-3.1-8B-Instruct \
+  --host 0.0.0.0 \
+  --port 30000
+```
+
+### Google Compute Engine
+
+```bash
+# Create GPU instance
+gcloud compute instances create sglang-vm \
+  --zone=us-central1-a \
+  --machine-type=n1-standard-8 \
+  --accelerator=type=nvidia-tesla-v100,count=1 \
+  --image-family=ubuntu-2204-lts \
+  --image-project=ubuntu-os-cloud \
+  --boot-disk-size=200GB \
+  --maintenance-policy=TERMINATE
+
+# Install NVIDIA drivers
+gcloud compute ssh sglang-vm -- 'curl https://raw.githubusercontent.com/GoogleCloudPlatform/compute-gpu-installation/main/linux/install_gpu_driver.py --output install_gpu_driver.py && sudo python3 install_gpu_driver.py'
+
+# Install Docker and run SGLang
+gcloud compute ssh sglang-vm -- 'sudo apt-get update && sudo apt-get install -y docker.io nvidia-container-toolkit && sudo docker run -d --gpus all -p 30000:30000 lmsysorg/sglang:latest python3 -m sglang.launch_server --model-path meta-llama/Llama-3.1-8B-Instruct --host 0.0.0.0 --port 30000'
+```
+
+## Microsoft Azure
+
+### Azure Kubernetes Service (AKS)
+
+#### Create AKS Cluster
+
+```bash
+# Create resource group
+az group create --name sglang-rg --location eastus
+
+# Create AKS cluster with GPU nodes
+az aks create \
+  --resource-group sglang-rg \
+  --name sglang-aks \
+  --node-count 2 \
+  --node-vm-size Standard_NC6s_v3 \
+  --generate-ssh-keys
+
+# Get credentials
+az aks get-credentials --resource-group sglang-rg --name sglang-aks
+
+# Install NVIDIA device plugin
+kubectl apply -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.0/nvidia-device-plugin.yml
+```
+
+#### Deploy SGLang
+
+Use standard Kubernetes manifests from the [Kubernetes guide](/deployment/kubernetes).
+
+### Azure VM
+
+```bash
+# Create GPU VM
+az vm create \
+  --resource-group sglang-rg \
+  --name sglang-vm \
+  --image UbuntuLTS \
+  --size Standard_NC6s_v3 \
+  --admin-username azureuser \
+  --generate-ssh-keys
+
+# Open port 30000
+az vm open-port --port 30000 --resource-group sglang-rg --name sglang-vm
+
+# SSH and install
+az vm run-command invoke \
+  --resource-group sglang-rg \
+  --name sglang-vm \
+  --command-id RunShellScript \
+  --scripts "curl -fsSL https://get.docker.com | sh && sudo apt-get install -y nvidia-container-toolkit && sudo docker run -d --gpus all -p 30000:30000 lmsysorg/sglang:latest python3 -m sglang.launch_server --model-path meta-llama/Llama-3.1-8B-Instruct --host 0.0.0.0 --port 30000"
+```
+
+### Azure Container Instances
+
+```bash
+az container create \
+  --resource-group sglang-rg \
+  --name sglang-aci \
+  --image lmsysorg/sglang:latest \
+  --cpu 4 \
+  --memory 16 \
+  --gpu-count 1 \
+  --gpu-sku V100 \
+  --ports 30000 \
+  --command-line "python3 -m sglang.launch_server --model-path meta-llama/Llama-3.1-8B-Instruct --host 0.0.0.0 --port 30000"
+```
+
+## Other Cloud Providers
+
+### Oracle Cloud Infrastructure (OCI)
+
+```bash
+# Launch GPU instance
+oci compute instance launch \
+  --availability-domain <AD> \
+  --compartment-id <COMPARTMENT_ID> \
+  --shape VM.GPU3.1 \
+  --image-id <UBUNTU_IMAGE_ID> \
+  --subnet-id <SUBNET_ID>
+```
+
+### Alibaba Cloud
+
+```bash
+# Create ECS instance with GPU
+aliyun ecs CreateInstance \
+  --RegionId cn-hangzhou \
+  --InstanceType ecs.gn6i-c4g1.xlarge \
+  --ImageId ubuntu_22_04_x64
+```
+
+### Lambda Labs
+
+Lambda Labs provides cost-effective GPU cloud:
+
+```bash
+# Launch instance via Lambda Cloud dashboard
+# SSH into instance
+ssh ubuntu@<instance-ip>
+
+# Install SGLang
+pip install "sglang[all]"
+
+# Launch server
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --host 0.0.0.0 \
+  --port 30000
+```
+
+## Cloud Storage Integration
+
+### AWS S3 for Models
+
+```python
+# Download model from S3
+import boto3
+s3 = boto3.client('s3')
+s3.download_file('my-bucket', 'models/llama-8b', '/models/llama-8b')
+
+# Launch with local model
+python -m sglang.launch_server --model-path /models/llama-8b
+```
+
+### Google Cloud Storage
+
+```bash
+# Download model
+gsutil -m cp -r gs://my-bucket/models/llama-8b /models/
+
+# Launch
+python -m sglang.launch_server --model-path /models/llama-8b
+```
+
+### Azure Blob Storage
+
+```bash
+# Install Azure CLI
+az storage blob download-batch \
+  --account-name mystorageaccount \
+  --source models \
+  --destination /models/
+```
+
+## Cost Optimization
+
+### Use Spot/Preemptible Instances
+
+**AWS Spot Instances:**
+```bash
+aws ec2 run-instances \
+  --instance-type p3.2xlarge \
+  --instance-market-options MarketType=spot
+```
+
+**GCP Preemptible VMs:**
+```bash
+gcloud compute instances create sglang-vm \
+  --preemptible \
+  --machine-type n1-standard-8 \
+  --accelerator type=nvidia-tesla-v100,count=1
+```
+
+**Azure Spot VMs:**
+```bash
+az vm create \
+  --priority Spot \
+  --max-price -1 \
+  --size Standard_NC6s_v3
+```
+
+### Auto-Scaling
+
+Implement cluster autoscaling to scale down during low usage:
+
+```bash
+# AWS EKS
+aws eks update-nodegroup-config \
+  --cluster-name sglang-cluster \
+  --nodegroup-name gpu-nodes \
+  --scaling-config minSize=0,maxSize=4,desiredSize=1
+
+# GKE
+gcloud container clusters update sglang-cluster \
+  --enable-autoscaling \
+  --min-nodes 0 \
+  --max-nodes 4
+```
+
+## Security Best Practices
+
+### Network Security
+
+1. **Use private subnets** for compute instances
+2. **Implement VPC peering** for multi-region deployments
+3. **Configure security groups** to restrict access:
+
+```bash
+# AWS security group
+aws ec2 create-security-group \
+  --group-name sglang-sg \
+  --description "SGLang security group"
+
+aws ec2 authorize-security-group-ingress \
+  --group-name sglang-sg \
+  --protocol tcp \
+  --port 30000 \
+  --cidr 10.0.0.0/16
+```
+
+### Secrets Management
+
+**AWS Secrets Manager:**
+```python
+import boto3
+client = boto3.client('secretsmanager')
+response = client.get_secret_value(SecretId='hf-token')
+token = response['SecretString']
+```
+
+**GCP Secret Manager:**
+```bash
+echo -n "your-token" | gcloud secrets create hf-token --data-file=-
+kubectl create secret generic hf-token \
+  --from-literal=token=$(gcloud secrets versions access latest --secret=hf-token)
+```
+
+**Azure Key Vault:**
+```bash
+az keyvault secret set \
+  --vault-name sglang-vault \
+  --name hf-token \
+  --value "your-token"
+```
+
+## Monitoring and Logging
+
+### AWS CloudWatch
+
+```python
+import boto3
+cloudwatch = boto3.client('cloudwatch')
+
+cloudwatch.put_metric_data(
+    Namespace='SGLang',
+    MetricData=[
+        {
+            'MetricName': 'Requests',
+            'Value': 100,
+            'Unit': 'Count'
+        },
+    ]
+)
+```
+
+### GCP Cloud Logging
+
+```bash
+gcloud logging read "resource.type=k8s_container AND resource.labels.container_name=sglang" \
+  --limit 50 \
+  --format json
+```
+
+### Azure Monitor
+
+```bash
+az monitor metrics list \
+  --resource /subscriptions/<sub-id>/resourceGroups/sglang-rg/providers/Microsoft.ContainerService/managedClusters/sglang-aks \
+  --metric CPUUsagePercentage
+```
+
+## Next Steps
+
+- [Kubernetes Deployment](/deployment/kubernetes) - Detailed K8s configurations
+- [Multi-Node Setup](/deployment/multi-node) - Distributed deployments
+- [Docker Deployment](/deployment/docker) - Container configurations

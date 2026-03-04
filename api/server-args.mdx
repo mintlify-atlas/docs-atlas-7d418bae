@@ -1,0 +1,467 @@
+---
+title: ServerArgs
+description: Configuration options for SGLang server
+---
+
+# ServerArgs
+
+The `ServerArgs` class contains all configuration options for launching an SGLang server or engine. These arguments control model loading, memory management, parallelism, kernel backends, and optimization settings.
+
+## Usage
+
+```python
+from sglang import Engine
+from sglang.srt.server_args import ServerArgs
+
+# Option 1: Pass arguments directly to Engine
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=2,
+    mem_fraction_static=0.85
+)
+
+# Option 2: Create ServerArgs first
+server_args = ServerArgs(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=2,
+    mem_fraction_static=0.85
+)
+engine = Engine(server_args=server_args)
+```
+
+## Model and Tokenizer
+
+<ParamField path="model_path" type="str" required>
+  Path to the model on Hugging Face Hub or local filesystem.
+  
+  ```python
+  model_path="meta-llama/Llama-3.1-8B-Instruct"
+  # or
+  model_path="/path/to/local/model"
+  ```
+</ParamField>
+
+<ParamField path="tokenizer_path" type="Optional[str]" default="None">
+  Path to tokenizer. Defaults to `model_path` if not specified.
+</ParamField>
+
+<ParamField path="tokenizer_mode" type="str" default="auto">
+  Tokenizer mode. Options: `"auto"`, `"slow"`, `"fast"`.
+</ParamField>
+
+<ParamField path="skip_tokenizer_init" type="bool" default="False">
+  Skip tokenizer initialization. Useful when passing pre-tokenized input_ids.
+</ParamField>
+
+<ParamField path="load_format" type="str" default="auto">
+  Model weight loading format.
+  
+  Options: `"auto"`, `"pt"`, `"safetensors"`, `"npcache"`, `"dummy"`, `"gguf"`, `"bitsandbytes"`
+</ParamField>
+
+<ParamField path="trust_remote_code" type="bool" default="False">
+  Trust remote code when loading models from Hugging Face.
+</ParamField>
+
+<ParamField path="context_length" type="Optional[int]" default="None">
+  Maximum context length. Auto-detected from model config if not specified.
+</ParamField>
+
+<ParamField path="revision" type="Optional[str]" default="None">
+  Model revision (branch, tag, or commit) to use from Hugging Face.
+</ParamField>
+
+## HTTP Server
+
+<ParamField path="host" type="str" default="127.0.0.1">
+  Server host address.
+</ParamField>
+
+<ParamField path="port" type="int" default="30000">
+  Server port number.
+</ParamField>
+
+<ParamField path="api_key" type="Optional[str]" default="None">
+  API key for authentication.
+</ParamField>
+
+<ParamField path="served_model_name" type="Optional[str]" default="None">
+  Model name to report in API responses. Defaults to `model_path`.
+</ParamField>
+
+## Data Type and Quantization
+
+<ParamField path="dtype" type="str" default="auto">
+  Data type for model weights and computation.
+  
+  Options: `"auto"`, `"float16"`, `"bfloat16"`, `"float32"`
+</ParamField>
+
+<ParamField path="quantization" type="Optional[str]" default="None">
+  Quantization method.
+  
+  Options: `"awq"`, `"fp8"`, `"gptq"`, `"marlin"`, `"bitsandbytes"`, `"gguf"`, and more.
+  
+  ```python
+  quantization="awq"  # For AWQ quantized models
+  quantization="fp8"  # For FP8 quantization
+  ```
+</ParamField>
+
+<ParamField path="kv_cache_dtype" type="str" default="auto">
+  Data type for KV cache.
+  
+  Options: `"auto"`, `"fp8_e4m3"`, `"fp8_e5m2"`, `"bfloat16"`, `"float16"`
+  
+  Using FP8 for KV cache can significantly reduce memory usage.
+</ParamField>
+
+## Memory and Scheduling
+
+<ParamField path="mem_fraction_static" type="Optional[float]" default="None">
+  Fraction of GPU memory to use for model weights and KV cache.
+  
+  Auto-calculated based on GPU memory capacity if not specified.
+  
+  ```python
+  mem_fraction_static=0.85  # Use 85% of GPU memory
+  ```
+</ParamField>
+
+<ParamField path="max_total_tokens" type="Optional[int]" default="None">
+  Maximum total tokens in the KV cache pool.
+  
+  This is the maximum number of tokens that can be cached across all requests.
+</ParamField>
+
+<ParamField path="max_running_requests" type="Optional[int]" default="None">
+  Maximum number of requests to process simultaneously.
+</ParamField>
+
+<ParamField path="max_queued_requests" type="Optional[int]" default="None">
+  Maximum number of requests to queue when busy.
+</ParamField>
+
+<ParamField path="chunked_prefill_size" type="Optional[int]" default="None">
+  Chunk size for chunked prefill.
+  
+  Auto-calculated based on GPU memory capacity if not specified.
+  - Small GPUs (&lt;20GB): 2048
+  - Medium GPUs (20-60GB): 4096
+  - Large GPUs (&gt;60GB): 8192+
+</ParamField>
+
+<ParamField path="max_prefill_tokens" type="int" default="16384">
+  Maximum tokens for prefill phase.
+</ParamField>
+
+<ParamField path="schedule_policy" type="str" default="fcfs">
+  Scheduling policy. Options: `"fcfs"` (first-come-first-serve), `"lpm"` (longest-prefix-match).
+</ParamField>
+
+<ParamField path="enable_priority_scheduling" type="bool" default="False">
+  Enable priority-based request scheduling.
+</ParamField>
+
+## Parallelism
+
+<ParamField path="tp_size" type="int" default="1">
+  Tensor parallelism size (number of GPUs for model parallelism).
+  
+  ```python
+  tp_size=4  # Use 4 GPUs with tensor parallelism
+  ```
+</ParamField>
+
+<ParamField path="dp_size" type="int" default="1">
+  Data parallelism size (number of independent model replicas).
+  
+  ```python
+  dp_size=2  # Run 2 independent replicas
+  ```
+</ParamField>
+
+<ParamField path="pp_size" type="int" default="1">
+  Pipeline parallelism size (number of pipeline stages).
+</ParamField>
+
+<ParamField path="nnodes" type="int" default="1">
+  Number of nodes in a multi-node setup.
+</ParamField>
+
+<ParamField path="node_rank" type="int" default="0">
+  Current node rank (0 to nnodes-1).
+</ParamField>
+
+## Kernel Backends
+
+<ParamField path="attention_backend" type="Optional[str]" default="None">
+  Attention kernel backend.
+  
+  Options: `"flashinfer"`, `"flashinfer"`, `"triton"`, `"torch_native"`, `"fa3"` (FlashAttention-3)
+  
+  Auto-selected based on hardware if not specified.
+</ParamField>
+
+<ParamField path="sampling_backend" type="Optional[str]" default="None">
+  Sampling backend. Options: `"flashinfer"`, `"pytorch"`
+</ParamField>
+
+<ParamField path="grammar_backend" type="Optional[str]" default="None">
+  Structured generation backend.
+  
+  Options: `"xgrammar"`, `"outlines"`, `"llguidance"`, `"none"`
+</ParamField>
+
+## CUDA Graph Optimization
+
+<ParamField path="disable_cuda_graph" type="bool" default="False">
+  Disable CUDA graph optimization.
+</ParamField>
+
+<ParamField path="cuda_graph_max_bs" type="Optional[int]" default="None">
+  Maximum batch size for CUDA graph capture.
+  
+  Auto-calculated based on GPU memory:
+  - Small GPUs: 8-24
+  - Medium GPUs: 32-160
+  - Large GPUs: 256-512
+</ParamField>
+
+<ParamField path="disable_cuda_graph_padding" type="bool" default="False">
+  Disable padding in CUDA graph batch sizes.
+</ParamField>
+
+## Speculative Decoding
+
+<ParamField path="speculative_algorithm" type="Optional[str]" default="None">
+  Speculative decoding algorithm.
+  
+  Options: `"EAGLE"`, `"STANDALONE"`, `"NGRAM"`
+</ParamField>
+
+<ParamField path="speculative_draft_model_path" type="Optional[str]" default="None">
+  Path to draft model for speculative decoding.
+</ParamField>
+
+<ParamField path="speculative_num_steps" type="Optional[int]" default="None">
+  Number of speculative decoding steps.
+</ParamField>
+
+<ParamField path="speculative_num_draft_tokens" type="Optional[int]" default="None">
+  Number of draft tokens to generate per step.
+</ParamField>
+
+## LoRA
+
+<ParamField path="enable_lora" type="Optional[bool]" default="None">
+  Enable LoRA adapter support.
+</ParamField>
+
+<ParamField path="max_lora_rank" type="Optional[int]" default="None">
+  Maximum LoRA rank to support.
+</ParamField>
+
+<ParamField path="lora_paths" type="Optional[Union[List[str], List[dict]]]" default="None">
+  Paths to LoRA adapters to pre-load.
+  
+  ```python
+  lora_paths=["path/to/lora1", "path/to/lora2"]
+  ```
+</ParamField>
+
+<ParamField path="max_loaded_loras" type="Optional[int]" default="None">
+  Maximum number of LoRA adapters to keep loaded.
+</ParamField>
+
+<ParamField path="lora_backend" type="str" default="csgmv">
+  LoRA kernel backend. Options: `"triton"`, `"csgmv"`, `"torch_native"`
+</ParamField>
+
+## Expert Parallelism (MoE)
+
+<ParamField path="ep_size" type="int" default="1">
+  Expert parallelism size for Mixture-of-Experts models.
+</ParamField>
+
+<ParamField path="moe_runner_backend" type="str" default="auto">
+  MoE kernel backend.
+  
+  Options: `"auto"`, `"triton"`, `"flashinfer_cutlass"`, `"deep_gemm"`
+</ParamField>
+
+<ParamField path="moe_a2a_backend" type="str" default="none">
+  All-to-all communication backend for MoE.
+  
+  Options: `"none"`, `"deepep"`, `"mooncake"`
+</ParamField>
+
+## Logging and Monitoring
+
+<ParamField path="log_level" type="str" default="info">
+  Logging level. Options: `"debug"`, `"info"`, `"warning"`, `"error"`
+</ParamField>
+
+<ParamField path="log_requests" type="bool" default="False">
+  Log all requests and responses.
+</ParamField>
+
+<ParamField path="show_time_cost" type="bool" default="False">
+  Show time cost for each request.
+</ParamField>
+
+<ParamField path="enable_metrics" type="bool" default="False">
+  Enable Prometheus metrics.
+</ParamField>
+
+<ParamField path="enable_trace" type="bool" default="False">
+  Enable OpenTelemetry tracing.
+</ParamField>
+
+<ParamField path="otlp_traces_endpoint" type="str" default="localhost:4317">
+  OpenTelemetry collector endpoint.
+</ParamField>
+
+## Advanced Options
+
+<ParamField path="disable_radix_cache" type="bool" default="False">
+  Disable radix cache (prefix caching) optimization.
+</ParamField>
+
+<ParamField path="random_seed" type="Optional[int]" default="None">
+  Random seed for reproducibility. Auto-generated if not specified.
+</ParamField>
+
+<ParamField path="stream_interval" type="int" default="1">
+  Token interval for streaming responses.
+</ParamField>
+
+<ParamField path="download_dir" type="Optional[str]" default="None">
+  Directory for downloading models from Hugging Face.
+</ParamField>
+
+<ParamField path="enable_torch_compile" type="bool" default="False">
+  Enable PyTorch compilation for model optimization.
+</ParamField>
+
+<ParamField path="device" type="Optional[str]" default="None">
+  Device to use. Options: `"cuda"`, `"cpu"`, `"npu"`. Auto-detected if not specified.
+</ParamField>
+
+## Configuration Examples
+
+### Basic Configuration
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=1,
+    log_level="info"
+)
+```
+
+### Production Configuration
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-70B-Instruct",
+    tp_size=4,
+    mem_fraction_static=0.90,
+    max_running_requests=1000,
+    chunked_prefill_size=8192,
+    enable_metrics=True,
+    enable_torch_compile=True,
+    log_level="warning"
+)
+```
+
+### Quantized Model
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="TheBloke/Llama-2-70B-AWQ",
+    quantization="awq",
+    tp_size=2,
+    kv_cache_dtype="fp8_e4m3"
+)
+```
+
+### Multi-LoRA Configuration
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    enable_lora=True,
+    max_lora_rank=64,
+    lora_paths=[
+        "adapter1",
+        "adapter2",
+        "adapter3"
+    ],
+    max_loaded_loras=10
+)
+```
+
+### Data Parallelism
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    dp_size=4,  # 4 replicas
+    load_balance_method="round_robin"
+)
+```
+
+### Speculative Decoding
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-70B-Instruct",
+    tp_size=4,
+    speculative_algorithm="EAGLE",
+    speculative_draft_model_path="meta-llama/Llama-3.1-8B-Instruct",
+    speculative_num_steps=5
+)
+```
+
+### Multi-Node Configuration
+
+```python
+# Node 0
+from sglang import Engine
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-70B-Instruct",
+    tp_size=8,
+    nnodes=2,
+    node_rank=0,
+    dist_init_addr="node0:12345"
+)
+
+# Node 1
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-70B-Instruct",
+    tp_size=8,
+    nnodes=2,
+    node_rank=1,
+    dist_init_addr="node0:12345"
+)
+```
+
+## See Also
+
+- [Engine](/api/engine) - Main inference engine
+- [Runtime](/api/runtime) - HTTP server wrapper
+- [SamplingParams](/api/sampling-params) - Sampling configuration

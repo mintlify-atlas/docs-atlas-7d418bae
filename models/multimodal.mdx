@@ -1,0 +1,492 @@
+---
+title: Multimodal Models
+description: Guide for vision, audio, and video models in SGLang
+---
+
+SGLang supports a wide range of multimodal models that process images, videos, and audio alongside text inputs.
+
+## Overview
+
+Multimodal models extend language models with specialized encoders for:
+
+- **Vision** - Image understanding and analysis
+- **Video** - Temporal reasoning and video QA
+- **Audio** - Speech and audio processing
+- **Omnimodal** - Combined modalities
+
+## Quick Start
+
+### Basic Vision Model
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.2-11B-Vision-Instruct \
+  --enable-multimodal \
+  --host 0.0.0.0 \
+  --port 30000
+```
+
+### Image Request Example
+
+```python
+import requests
+
+url = "http://localhost:30000/v1/chat/completions"
+
+data = {
+    "model": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.jpg"},
+                },
+            ],
+        }
+    ],
+    "max_tokens": 300,
+}
+
+response = requests.post(url, json=data)
+print(response.json())
+```
+
+## Vision-Language Models
+
+### Qwen-VL Family
+
+Alibaba's vision-language models with strong image and video understanding.
+
+#### Launch Qwen3-VL
+
+```bash
+# FP8 mode (recommended for H100/H200)
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 \
+  --tp 8 \
+  --ep 8 \
+  --keep-mm-feature-on-device
+
+# BF16 mode (for A100/H100)
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-VL-235B-A22B-Instruct \
+  --tp 8 \
+  --ep 8
+```
+
+#### Hardware Recommendations
+
+- **H100 with FP8**: Use FP8 checkpoint for best memory efficiency
+- **A100/H100 with BF16**: Use `--mm-max-concurrent-calls` to control memory
+- **H200 & B200**: Full context + concurrent image/video processing
+
+#### Qwen-VL Video Support
+
+```python
+import requests
+
+url = "http://localhost:30000/v1/chat/completions"
+
+data = {
+    "model": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's happening in this video?"},
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://github.com/sgl-project/sgl-test-files/raw/refs/heads/main/videos/jobs_presenting_ipod.mp4"
+                    },
+                },
+            ],
+        }
+    ],
+    "max_tokens": 300,
+}
+
+response = requests.post(url, json=data)
+print(response.json())
+```
+
+#### Qwen-VL Optimization Flags
+
+```bash
+# Use CUDA IPC transport for lower latency
+SGLANG_USE_CUDA_IPC_TRANSPORT=1 \
+SGLANG_VLM_CACHE_SIZE_MB=0 \
+python -m sglang.launch_server \
+  --model-path Qwen/Qwen3-VL-235B-A22B-Instruct \
+  --tp 8 \
+  --attention-backend fa3 \
+  --mm-attention-backend fa3 \
+  --keep-mm-feature-on-device \
+  --enable-metrics
+```
+
+**Key flags**:
+- `--mm-attention-backend fa3` - Use FlashAttention 3 for multimodal
+- `--mm-max-concurrent-calls <N>` - Control concurrent multimodal processing
+- `--mm-per-request-timeout <seconds>` - Timeout for large videos
+- `--keep-mm-feature-on-device` - Keep features on GPU (lower latency, higher memory)
+- `SGLANG_USE_CUDA_IPC_TRANSPORT=1` - Shared memory pool for multimodal data
+
+### DeepSeek Vision Models
+
+#### DeepSeek-VL2
+
+Vision-language variant with advanced multimodal reasoning:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/deepseek-vl2 \
+  --tp 2 \
+  --trust-remote-code
+```
+
+#### DeepSeek-OCR / OCR-2
+
+Specialized for document understanding:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-OCR-2 \
+  --trust-remote-code
+```
+
+Recommended prompts:
+
+```python
+# With grounding
+content = "<image>\n<|grounding|>Convert the document to markdown."
+
+# Free OCR
+content = "<image>\nFree OCR."
+```
+
+#### DeepSeek-Janus-Pro
+
+Image understanding AND generation:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/Janus-Pro-7B \
+  --trust-remote-code
+```
+
+### Llama Vision
+
+Meta's vision-enabled Llama models:
+
+```bash
+# Llama 3.2 Vision 11B
+python3 -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.2-11B-Vision-Instruct \
+  --enable-multimodal
+
+# Llama 3.2 Vision 90B
+python3 -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.2-90B-Vision-Instruct \
+  --tp 4 \
+  --enable-multimodal
+```
+
+### LLaVA Family
+
+Open vision-chat models:
+
+```bash
+# LLaVA 1.5
+python3 -m sglang.launch_server \
+  --model-path liuhaotian/llava-v1.5-13b
+
+# LLaVA-NeXT (larger)
+python3 -m sglang.launch_server \
+  --model-path lmms-lab/llava-next-72b \
+  --tp 4
+
+# LLaVA-OneVision (Qwen backbone)
+python3 -m sglang.launch_server \
+  --model-path lmms-lab/llava-onevision-qwen2-7b-ov
+```
+
+### Other Vision Models
+
+| Model Family | Example Model | Key Features |
+|--------------|---------------|-------------|
+| **Gemma 3 MM** | `google/gemma-3-4b-it` | 4B-27B, 256 tokens per image, 128K context |
+| **Kimi-VL** | `moonshotai/Kimi-VL-A3B-Instruct` | Moonshot's compact VLM |
+| **Mistral-Small-3.1** | `mistralai/Mistral-Small-3.1-24B-Instruct-2503` | 24B multimodal with tool calling |
+| **Phi-4-multimodal** | `microsoft/Phi-4-multimodal-instruct` | 5.6B with vision + audio |
+| **MiMo-VL** | `XiaomiMiMo/MiMo-VL-7B-RL` | Native resolution ViT encoder |
+| **MiniCPM-V/o** | `openbmb/MiniCPM-V-2_6` | 8B, edge-optimized |
+| **GLM-4.5V** | `zai-org/GLM-4.5V` | 106B multimodal reasoning |
+| **DotsVLM** | `rednote-hilab/dots.vlm1.inst` | NaViT vision encoder + DeepSeek V3 |
+| **NVILA** | `Efficient-Large-Model/NVILA-8B` | Efficient multi-modal design |
+| **Ernie4.5-VL** | `baidu/ERNIE-4.5-VL-28B-A3B-PT` | Baidu's 28B/424B VLMs |
+| **Step3-VL** | `stepfun-ai/Step3-VL-10B` | Lightweight 10B VLM |
+| **InternVL** | `OpenGVLab/InternVL2-8B` | Open-source VLM series |
+
+## Audio Models
+
+### Qwen3-Omni
+
+Omni-modal model supporting audio input:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-Omni-30B-A3B-Instruct \
+  --tp 2 \
+  --ep 2
+```
+
+**Note**: Currently supports **Thinker** component (audio understanding) only. Audio generation (**Talker**) not yet supported.
+
+### Qwen2-Audio
+
+Audio-specific model:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen2-Audio-7B-Instruct
+```
+
+### Phi-4-multimodal (Audio)
+
+Supports text, vision, and audio:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path microsoft/Phi-4-multimodal-instruct
+```
+
+### Gemma3n-Audio
+
+Google's audio-enabled Gemma variant:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path google/gemma-3n-audio-1b-it
+```
+
+## Video Understanding
+
+Many vision models support video input through frame sampling:
+
+### Supported Video Models
+
+| Model | Example | Video Features |
+|-------|---------|----------------|
+| **Qwen-VL** | `Qwen/Qwen3-VL-30B-A3B-Instruct` | Frame sampler, video metadata |
+| **GLM-4v** | `zai-org/GLM-4.5V` | Decord decoder, rotary position |
+| **NVILA** | `Efficient-Large-Model/NVILA-8B` | 8 frames per clip, EVS pruning |
+| **LLaVA-NeXT-Video** | `lmms-lab/LLaVA-NeXT-Video-7B` | LlavaVid architecture |
+| **LLaVA-OneVision** | `lmms-lab/llava-onevision-qwen2-7b-ov` | Multiple images/video frames |
+| **Nemotron Nano 2.0 VL** | `nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16` | 2 FPS, max 128 frames, EVS pruning |
+
+### Video Request Example
+
+See the [Image Request Example](#image-request-example) above, but replace `image_url` with `video_url`:
+
+```python
+{
+    "type": "video_url",
+    "video_url": {
+        "url": "https://example.com/video.mp4"
+    },
+}
+```
+
+### NVILA EVS Pruning
+
+NVILA uses Embedded Video Sparsity (EVS) to remove redundant tokens:
+
+```bash
+# Default: 70% pruning
+python3 -m sglang.launch_server \
+  --model-path nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16 \
+  --trust-remote-code
+
+# Disable EVS
+python3 -m sglang.launch_server \
+  --model-path nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16 \
+  --json-model-override-args '{"video_pruning_rate": 0.0}' \
+  --trust-remote-code
+```
+
+## Performance Optimization
+
+### Keep Features on Device
+
+Trade GPU memory for lower latency:
+
+```bash
+--keep-mm-feature-on-device
+```
+
+**Default behavior**: Features moved to CPU after processing (saves GPU memory)
+**With flag**: Features stay on GPU (faster inference, more memory)
+
+### Multimodal Input Limits
+
+Control memory usage and speed:
+
+```bash
+--mm-process-config '{"image":{"max_pixels":1048576},"video":{"fps":3,"max_pixels":602112,"max_frames":60}}'
+```
+
+**Note**: Currently only `qwen_vl` processors support this config.
+
+### Concurrent Processing Control
+
+```bash
+--mm-max-concurrent-calls 4  # Limit parallel multimodal processing
+--mm-per-request-timeout 300  # 5 minute timeout for large videos
+```
+
+### Attention Backend Selection
+
+```bash
+--attention-backend fa3 \  # Text attention
+--mm-attention-backend fa3  # Multimodal attention
+```
+
+## Special Considerations
+
+### Gemma 3 Bidirectional Attention
+
+Gemma 3 multimodal uses bidirectional attention between image tokens during prefill.
+
+**Limitation**: Only supported with Triton backend, incompatible with CUDA Graph and Chunked Prefill.
+
+```bash
+python -m sglang.launch_server \
+  --model-path google/gemma-3-4b-it \
+  --enable-multimodal \
+  --attention-backend triton \  # Required
+  --disable-cuda-graph \  # Required
+  --chunked-prefill-size -1  # Disable chunked prefill
+```
+
+For better performance with some accuracy loss, use other backends (falls back to causal attention).
+
+### MiniCPM-o Audio/Video
+
+MiniCPM-o adds audio/video support to MiniCPM-V:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path openbmb/MiniCPM-o-2_6 \
+  --trust-remote-code
+```
+
+### GLM Models Chat Template
+
+Some GLM vision models require specific chat templates:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path zai-org/GLM-4.5V \
+  --chat-template glm-4v
+```
+
+### NVILA Mamba Cache Size
+
+NVILA uses hybrid Mamba-Transformer architecture:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16 \
+  --max-mamba-cache-size 512 \  # Adjust for memory constraints
+  --trust-remote-code
+```
+
+## Specialized Multimodal Models
+
+### OCR Models
+
+| Model | Command | Use Case |
+|-------|---------|----------|
+| **DeepSeek-OCR-2** | `--model-path deepseek-ai/DeepSeek-OCR-2` | Document understanding |
+| **GLM-OCR** | `--model-path zai-org/GLM-OCR` | Fast general OCR |
+| **DotsVLM-OCR** | `--model-path rednote-hilab/dots.ocr` | Enhanced text extraction |
+| **LightOnOCR** | Model-specific | Lightweight OCR |
+| **PaddleOCR-VL** | Model-specific | PaddlePaddle OCR |
+
+### Image Generation
+
+| Model | Capabilities |
+|-------|-------------|
+| **DeepSeek-Janus-Pro** | Understanding + Generation |
+
+### Enterprise Models
+
+| Model | Provider | Key Features |
+|-------|----------|-------------|
+| **NVIDIA Nemotron Nano 2.0 VL** | NVIDIA | Hybrid Mamba-Transformer, high throughput |
+| **Llama Nemotron Super** | NVIDIA | Enterprise AI agents |
+| **JetVLM** | Jet AI | High-performance multimodal (coming soon) |
+
+## Supported Model Architectures
+
+SGLang supports 30+ multimodal model architectures. To verify support for a specific architecture, search GitHub:
+
+```
+repo:sgl-project/sglang path:/^python\/sglang\/srt\/models\// YourModelArchitecture
+```
+
+Example:
+
+```
+repo:sgl-project/sglang path:/^python\/sglang\/srt\/models\// Qwen2_5_VLForConditionalGeneration
+```
+
+## Resources
+
+- [OpenAI Vision API Documentation](https://docs.sglang.io/basic_usage/openai_api_vision.html)
+- [Qwen3-VL Detailed Guide](https://docs.sglang.io/basic_usage/qwen3_vl.html)
+- [Multimodal Encoder DP](https://docs.sglang.io/advanced_features/dp_for_multi_modal_encoder.html)
+
+## Troubleshooting
+
+### Out of Memory with Images
+
+Reduce max pixels:
+
+```bash
+--mm-process-config '{"image":{"max_pixels":524288}}'
+```
+
+### Timeout on Large Videos
+
+Increase timeout:
+
+```bash
+--mm-per-request-timeout 600  # 10 minutes
+```
+
+### Slow Multimodal Latency
+
+Keep features on device:
+
+```bash
+--keep-mm-feature-on-device
+```
+
+### High GPU Memory with Videos
+
+Limit concurrent processing:
+
+```bash
+--mm-max-concurrent-calls 2
+```
+
+Or reduce video frames:
+
+```bash
+--mm-process-config '{"video":{"max_frames":30}}'
+```

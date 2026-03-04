@@ -1,0 +1,262 @@
+---
+title: Structured Outputs
+description: Constrain model outputs using JSON schemas, regex, and EBNF grammars
+---
+
+SGLang enables you to constrain model outputs to follow specific formats using JSON schemas, regular expressions, or EBNF grammars. The model output is guaranteed to follow the specified constraints.
+
+## Grammar Backends
+
+SGLang supports three grammar backends for constrained generation:
+
+<CardGroup cols={3}>
+  <Card title="XGrammar" icon="star">
+    **Default backend** - Best performance and utility. Supports JSON schema, regex, and EBNF.
+  </Card>
+  <Card title="Outlines" icon="code">
+    Supports JSON schema and regex constraints.
+  </Card>
+  <Card title="Llguidance" icon="compass">
+    Supports JSON schema, regex, and EBNF constraints.
+  </Card>
+</CardGroup>
+
+To select a backend, use `--grammar-backend` when launching the server:
+
+```bash
+# Use default XGrammar backend
+python -m sglang.launch_server --model-path meta-llama/Meta-Llama-3.1-8B-Instruct
+
+# Use Outlines backend
+python -m sglang.launch_server --model-path meta-llama/Meta-Llama-3.1-8B-Instruct --grammar-backend outlines
+
+# Use Llguidance backend
+python -m sglang.launch_server --model-path meta-llama/Meta-Llama-3.1-8B-Instruct --grammar-backend llguidance
+```
+
+<Tip>
+For better output quality, explicitly include instructions in your prompt to guide the model. For example: "Please generate the output in the following JSON format: ..."
+</Tip>
+
+## JSON Schema Constraints
+
+Constrain outputs to valid JSON following a specific schema. This is useful for extracting structured data from model responses.
+
+### Using Pydantic Models
+
+```python
+from pydantic import BaseModel, Field
+import openai
+
+class CapitalInfo(BaseModel):
+    name: str = Field(..., pattern=r"^\w+$", description="Name of the capital city")
+    population: int = Field(..., description="Population of the capital city")
+
+client = openai.Client(base_url="http://127.0.0.1:30000/v1", api_key="None")
+
+response = client.chat.completions.create(
+    model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": "Please generate the information of the capital of France in JSON format.",
+        },
+    ],
+    temperature=0,
+    max_tokens=128,
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "capital_info",
+            "schema": CapitalInfo.model_json_schema(),
+        },
+    },
+)
+
+# Validate the response
+capital_info = CapitalInfo.model_validate_json(response.choices[0].message.content)
+print(capital_info.model_dump_json())
+```
+
+### Using Direct JSON Schema
+
+```python
+import json
+
+json_schema = json.dumps({
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "pattern": "^[\\w]+$"},
+        "population": {"type": "integer"},
+    },
+    "required": ["name", "population"],
+})
+
+response = client.chat.completions.create(
+    model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": "Give me the information of the capital of France in JSON format.",
+        },
+    ],
+    temperature=0,
+    max_tokens=128,
+    response_format={
+        "type": "json_schema",
+        "json_schema": {"name": "capital_info", "schema": json.loads(json_schema)},
+    },
+)
+
+print(response.choices[0].message.content)
+```
+
+## EBNF Grammars
+
+Define custom grammars using Extended Backus-Naur Form (EBNF) notation. XGrammar uses the [GGML BNF format](https://github.com/ggerganov/llama.cpp/blob/master/grammars/README.md).
+
+```python
+ebnf_grammar = """
+root ::= city | description
+city ::= "London" | "Paris" | "Berlin" | "Rome"
+description ::= city " is " status
+status ::= "the capital of " country
+country ::= "England" | "France" | "Germany" | "Italy"
+"""
+
+response = client.chat.completions.create(
+    model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    messages=[
+        {"role": "system", "content": "You are a helpful geography bot."},
+        {
+            "role": "user",
+            "content": "Give me the information of the capital of France.",
+        },
+    ],
+    temperature=0,
+    max_tokens=32,
+    extra_body={"ebnf": ebnf_grammar},
+)
+
+print(response.choices[0].message.content)
+# Output: "Paris is the capital of France"
+```
+
+## Regular Expression Constraints
+
+Constrain outputs to match a specific regex pattern.
+
+```python
+response = client.chat.completions.create(
+    model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    messages=[
+        {"role": "user", "content": "What is the capital of France?"},
+    ],
+    temperature=0,
+    max_tokens=128,
+    extra_body={"regex": "(Paris|London)"},
+)
+
+print(response.choices[0].message.content)
+# Output: "Paris"
+```
+
+## Structural Tags
+
+Combine multiple schemas with trigger patterns for complex structured outputs, such as function calling.
+
+```python
+tool_weather = {
+    "type": "object",
+    "properties": {
+        "city": {"type": "string"},
+        "state": {"type": "string"},
+        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+    },
+    "required": ["city", "state", "unit"],
+}
+
+response = client.chat.completions.create(
+    model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+    messages=messages,
+    response_format={
+        "type": "structural_tag",
+        "format": {
+            "type": "triggered_tags",
+            "triggers": ["<function="],
+            "tags": [
+                {
+                    "begin": "<function=get_current_weather>",
+                    "content": {
+                        "type": "json_schema",
+                        "json_schema": tool_weather,
+                    },
+                    "end": "</function>",
+                },
+            ],
+        },
+    },
+)
+```
+
+## Native API Usage
+
+You can also use structured outputs with the native SGLang API:
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:30000/generate",
+    json={
+        "text": "What is the capital of France?",
+        "sampling_params": {
+            "temperature": 0,
+            "max_new_tokens": 128,
+            "regex": "(Paris|London)",
+        },
+    },
+)
+
+print(response.json()["text"])
+```
+
+## Implementation Details
+
+SGLang's constrained generation is implemented through the `GrammarManager` which:
+
+1. **Compiles grammars** - Converts JSON schemas, regex, or EBNF into efficient grammar objects
+2. **Caches compiled grammars** - Reuses compiled grammars across requests for better performance  
+3. **Applies constraints during generation** - Modifies logits to ensure only valid tokens are sampled
+4. **Supports jump-forward optimization** - Skips ahead when only one valid continuation exists
+
+The grammar compilation happens asynchronously to avoid blocking request processing. Requests wait in a grammar queue until their grammar objects are ready.
+
+Source: `python/sglang/srt/constrained/grammar_manager.py:24`
+
+## Performance Considerations
+
+<AccordionGroup>
+  <Accordion title="Grammar Compilation Overhead">
+    The first request with a new schema incurs compilation overhead. Subsequent requests with the same schema benefit from caching.
+  </Accordion>
+  
+  <Accordion title="Logit Processing Cost">
+    Applying grammar constraints adds per-token overhead. The impact varies by grammar complexity.
+  </Accordion>
+  
+  <Accordion title="Jump-Forward Optimization">
+    When the grammar has only one valid continuation, SGLang can skip token-by-token generation and jump forward, significantly improving throughput.
+  </Accordion>
+</AccordionGroup>
+
+## Configuration Options
+
+| Parameter | Description | Default |
+|-----------|-------------|----------|
+| `--grammar-backend` | Backend to use: `xgrammar`, `outlines`, or `llguidance` | `xgrammar` |
+| `--skip-tokenizer-init` | Skip tokenizer initialization (disables grammar support) | `False` |
+
+<Tip>
+For XGrammar technical details and performance characteristics, see the [XGrammar technical overview](https://blog.mlc.ai/2024/11/22/achieving-efficient-flexible-portable-structured-generation-with-xgrammar).
+</Tip>

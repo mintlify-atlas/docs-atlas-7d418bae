@@ -1,0 +1,304 @@
+---
+title: Launch Server
+description: Learn how to launch and configure the SGLang inference server
+---
+
+## Overview
+
+SGLang provides a high-performance inference server that can be launched using the `sglang serve` command. The server supports various deployment modes including HTTP, gRPC, and disaggregated prefill-decode architectures.
+
+## Basic Usage
+
+### Starting the Server
+
+The simplest way to launch a server:
+
+```bash
+sglang serve --model-path meta-llama/Llama-3.1-8B-Instruct
+```
+
+### Common Launch Options
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --host 0.0.0.0 \
+  --port 30000 \
+  --tp-size 2 \
+  --mem-fraction-static 0.8
+```
+
+## Server Modes
+
+### HTTP Server (Default)
+
+The default server mode provides OpenAI-compatible HTTP endpoints:
+
+```bash
+sglang serve --model-path meta-llama/Llama-3.1-8B-Instruct
+```
+
+**Available Endpoints:**
+- `/v1/chat/completions` - Chat completions API
+- `/v1/completions` - Text completions API
+- `/v1/embeddings` - Embeddings generation
+- `/health` - Health check endpoint
+- `/get_model_info` - Model information
+
+### gRPC Server
+
+For lower latency in high-throughput scenarios:
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --grpc-mode
+```
+
+### Disaggregated Prefill-Decode
+
+SGLang supports separating prefill and decode into different instances for optimized resource utilization.
+
+**Prefill Server:**
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --disaggregation-transfer-backend mooncake
+```
+
+**Decode Server:**
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode decode \
+  --disaggregation-transfer-backend mooncake
+```
+
+## Parallelism Options
+
+### Tensor Parallelism
+
+Split model across multiple GPUs:
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 4
+```
+
+### Pipeline Parallelism
+
+Distribute model layers across GPUs:
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 2 \
+  --pp-size 2
+```
+
+### Data Parallelism
+
+Run multiple replicas for increased throughput:
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --dp-size 4 \
+  --load-balance-method round_robin
+```
+
+## Performance Optimization
+
+### Memory Management
+
+<ParamField path="mem-fraction-static" type="float" default="auto">
+  Fraction of GPU memory to allocate for static usage (model weights + KV cache). 
+  Default is automatically calculated based on GPU memory and model size.
+</ParamField>
+
+<ParamField path="chunked-prefill-size" type="int" default="auto">
+  Maximum number of tokens to process in a single prefill batch. Larger values
+  improve throughput but require more memory.
+</ParamField>
+
+<ParamField path="max-total-tokens" type="int" default="null">
+  Maximum total number of tokens in the KV cache pool. Limits memory usage.
+</ParamField>
+
+### CUDA Graph Optimization
+
+CUDA graphs reduce kernel launch overhead:
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --cuda-graph-max-bs 256
+```
+
+<ParamField path="cuda-graph-max-bs" type="int" default="auto">
+  Maximum batch size for CUDA graph capture. Higher values enable batching
+  more requests but require more memory. Set to 0 to disable.
+</ParamField>
+
+<ParamField path="disable-cuda-graph" type="bool" default="false">
+  Disable CUDA graph optimization entirely.
+</ParamField>
+
+### Radix Attention Cache
+
+Accelerate requests with shared prefixes:
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --enable-cache-report
+```
+
+<ParamField path="disable-radix-cache" type="bool" default="false">
+  Disable the radix attention cache (prefix caching).
+</ParamField>
+
+<ParamField path="enable-cache-report" type="bool" default="false">
+  Include cache hit rate statistics in API responses.
+</ParamField>
+
+## Multi-Node Deployment
+
+For distributed training across multiple machines:
+
+```bash
+# Node 0 (rank 0)
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 8 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --dist-init-addr 192.168.1.100:5000
+
+# Node 1 (rank 1)
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --tp-size 8 \
+  --nnodes 2 \
+  --node-rank 1 \
+  --dist-init-addr 192.168.1.100:5000
+```
+
+## Quantization
+
+Reduce memory usage with quantization:
+
+```bash
+# FP8 Quantization
+sglang serve \
+  --model-path meta-llama/Llama-3.1-70B-Instruct \
+  --quantization fp8
+
+# AWQ 4-bit Quantization
+sglang serve \
+  --model-path TheBloke/Llama-2-13B-AWQ \
+  --quantization awq
+
+# GPTQ Quantization
+sglang serve \
+  --model-path TheBloke/Llama-2-13B-GPTQ \
+  --quantization gptq
+```
+
+Supported quantization methods:
+- `fp8` - FP8 quantization for reduced memory
+- `awq` - Activation-aware Weight Quantization
+- `gptq` - GPTQ quantization
+- `marlin` - Marlin sparse format
+- `bitsandbytes` - 8-bit and 4-bit quantization
+
+## Monitoring and Logging
+
+### Enable Metrics
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --enable-metrics
+```
+
+Metrics are exposed at `http://localhost:30000/metrics` in Prometheus format.
+
+### Request Logging
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --log-requests \
+  --log-level info
+```
+
+<ParamField path="log-requests" type="bool" default="false">
+  Log all incoming requests and responses.
+</ParamField>
+
+<ParamField path="log-level" type="string" default="info">
+  Set logging verbosity. Options: `debug`, `info`, `warning`, `error`.
+</ParamField>
+
+## Health Checks and Warmup
+
+### Server Warmup
+
+By default, the server runs warmup requests to initialize CUDA graphs and caches:
+
+<ParamField path="skip-server-warmup" type="bool" default="false">
+  Skip the warmup phase on server startup.
+</ParamField>
+
+<ParamField path="warmups" type="string" default="null">
+  Specify custom warmup functions (comma-separated) to run before server starts.
+  Example: `--warmups=warmup_name1,warmup_name2`
+</ParamField>
+
+### Health Endpoint
+
+Check server health:
+
+```bash
+curl http://localhost:30000/health
+```
+
+## Environment Variables
+
+SGLang respects several environment variables:
+
+- `CUDA_VISIBLE_DEVICES` - Control which GPUs are used
+- `NCCL_SOCKET_IFNAME` - Network interface for multi-node communication
+- `SGLANG_USE_MODELSCOPE` - Download models from ModelScope instead of HuggingFace
+- `HF_TOKEN` - HuggingFace authentication token for gated models
+
+## Python API
+
+You can also launch the server programmatically:
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=2,
+    mem_fraction_static=0.8
+)
+
+# Use the engine
+response = engine.generate(
+    prompt="Hello, how are you?",
+    sampling_params={"temperature": 0.8, "max_new_tokens": 128}
+)
+
+print(response["text"])
+```
+
+## See Also
+
+- [Server Arguments](/backend/server-arguments) - Complete reference of all server arguments
+- [OpenAI Compatible API](/backend/openai-compatible-api) - HTTP API documentation
+- [Sampling Parameters](/backend/sampling-parameters) - Control generation behavior

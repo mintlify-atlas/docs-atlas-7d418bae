@@ -1,0 +1,416 @@
+---
+title: Qwen Models
+description: Usage guide for Alibaba's Qwen model series in SGLang
+---
+
+Qwen (通义千问) is Alibaba Cloud's series of large language models and multimodal models, ranging from compact 0.6B models to massive 397B MoE architectures.
+
+## Overview
+
+The Qwen family includes:
+
+- **Qwen 3.5** - Latest generation with hybrid attention and MoE
+- **Qwen 3** - Dense and MoE variants with reasoning capabilities
+- **Qwen 2.5** - Previous generation, highly capable
+- **Qwen 2** - Foundation models
+- **Qwen-VL** - Vision-language multimodal models
+- **Qwen-Audio** - Audio-enabled models
+
+## Quick Start
+
+### Basic Dense Model
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-0.6B-Instruct \
+  --host 0.0.0.0 \
+  --port 30000
+```
+
+### Large MoE Model (Qwen 3.5)
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3.5-397B-A17B \
+  --tp 8 \
+  --trust-remote-code
+```
+
+## Qwen 3.5 Architecture
+
+Qwen 3.5 features cutting-edge architectural innovations:
+
+### Key Features
+
+- **Hybrid Attention**: Gated Delta Networks (linear, O(n) complexity) combined with full attention every 4th layer
+- **MoE with Shared Experts**: Top-8 active out of 64 routed experts plus a dedicated shared expert
+- **Multimodal**: DeepStack Vision Transformer with Conv3d for native image and video understanding
+
+### Launch Qwen 3.5 (Dense)
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3.5-397B-A17B \
+  --tp 8 \
+  --trust-remote-code
+```
+
+### AMD GPU Support (MI300X / MI325X / MI35X)
+
+On AMD Instinct GPUs, use the Triton attention backend:
+
+```bash
+SGLANG_USE_AITER=1 python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3.5-397B-A17B \
+  --tp 8 \
+  --attention-backend triton \
+  --trust-remote-code
+```
+
+**Tip**: Set `SGLANG_USE_AITER=1` to enable AMD's optimized aiter kernels for MoE and GEMM operations.
+
+### Configuration Tips for Large Models
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3.5-397B-A17B \
+  --tp 8 \
+  --trust-remote-code \
+  --watchdog-timeout 1200 \  # Increase for large model weight loading
+  --model-loader-extra-config '{"enable_multithread_load": true}'  # Parallel weight loading
+```
+
+## Qwen 3 Models
+
+Qwen 3 offers a range of sizes from 0.6B to 235B (MoE):
+
+### Available Models
+
+| Model | Parameters | Type | Use Case |
+|-------|-----------|------|----------|
+| Qwen3-0.6B | 0.6B | Dense | Edge/mobile devices |
+| Qwen3-1.7B | 1.7B | Dense | Lightweight deployment |
+| Qwen3-4B | 4B | Dense | Balanced performance |
+| Qwen3-7B | 7B | Dense | General purpose |
+| Qwen3-14B | 14B | Dense | Advanced tasks |
+| Qwen3-30B-A3B | 30B total, 3B active | MoE | Efficient large model |
+| Qwen3-235B-A22B | 235B total, 22B active | MoE | Largest Qwen 3 |
+
+### Launch Examples
+
+```bash
+# Lightweight model (0.6B)
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-0.6B-Instruct \
+  --port 30000
+
+# Mid-size model (7B)
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-7B-Instruct \
+  --port 30000
+
+# MoE model (30B total, 3B active)
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-30B-A3B-Instruct \
+  --tp 2 \
+  --trust-remote-code
+```
+
+## Reasoning and Tool Calling
+
+Qwen models support advanced reasoning and tool calling capabilities:
+
+### Enable Reasoning Parser
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3.5-397B-A17B \
+  --tp 8 \
+  --trust-remote-code \
+  --reasoning-parser qwen3 \
+  --tool-call-parser qwen3_coder
+```
+
+### Using Reasoning in Requests
+
+With the reasoning parser enabled, the model can separate reasoning tokens from the final answer:
+
+```python
+import openai
+
+client = openai.Client(base_url="http://localhost:8000/v1", api_key="-")
+
+response = client.chat.completions.create(
+    model="Qwen/Qwen3.5-397B-A17B",
+    messages=[
+        {"role": "user", "content": "What is the capital of France?"}
+    ],
+    max_tokens=512
+)
+
+# Access reasoning content separately
+print("Reasoning:", response.choices[0].message.reasoning_content)
+print("Answer:", response.choices[0].message.content)
+```
+
+## Qwen 2.5 & Qwen 2 Models
+
+Previous generation Qwen models are also fully supported:
+
+```bash
+# Qwen 2.5 models
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen2.5-7B-Instruct \
+  --port 30000
+
+# Qwen 2 MoE
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen2-57B-A14B-Instruct \
+  --tp 4 \
+  --port 30000
+```
+
+## Qwen-VL (Vision-Language Models)
+
+Qwen-VL models process both images and text. See the [Multimodal Models guide](multimodal) for complete details.
+
+### Quick Launch
+
+```bash
+# Qwen3-VL (latest)
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-VL-30B-A3B-Instruct \
+  --tp 2 \
+  --ep 2 \
+  --host 0.0.0.0 \
+  --port 30000
+
+# Qwen2.5-VL
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen2.5-VL-7B-Instruct \
+  --port 30000
+```
+
+### FP8 Mode (Memory Efficient)
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 \
+  --tp 8 \
+  --ep 8 \
+  --keep-mm-feature-on-device
+```
+
+### Image Request Example
+
+```python
+import requests
+
+url = "http://localhost:30000/v1/chat/completions"
+
+data = {
+    "model": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/image.jpg"
+                    },
+                },
+            ],
+        }
+    ],
+    "max_tokens": 300,
+}
+
+response = requests.post(url, json=data)
+print(response.json())
+```
+
+### Video Input Support
+
+```python
+import requests
+
+url = "http://localhost:30000/v1/chat/completions"
+
+data = {
+    "model": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's happening in this video?"},
+                {
+                    "type": "video_url",
+                    "video_url": {
+                        "url": "https://example.com/video.mp4"
+                    },
+                },
+            ],
+        }
+    ],
+    "max_tokens": 300,
+}
+
+response = requests.post(url, json=data)
+print(response.json())
+```
+
+## Qwen-Audio Models
+
+Qwen2-Audio processes audio input alongside text:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen2-Audio-7B-Instruct \
+  --port 30000
+```
+
+## Qwen Classification & Reward Models
+
+SGLang supports specialized Qwen variants:
+
+### Classification Models
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen2-7B-Classification \
+  --port 30000
+```
+
+### Reward Models
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen2-7B-Reward \
+  --port 30000
+```
+
+## Qwen3-Omni (Omnimodal)
+
+Qwen3-Omni is an omni-modal MoE model supporting text, images, audio, and video:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-Omni-30B-A3B-Instruct \
+  --tp 2 \
+  --ep 2 \
+  --port 30000
+```
+
+**Note**: Currently supports the **Thinker** component (multimodal understanding) only. Audio generation (**Talker**) is not yet supported.
+
+## Performance Optimization
+
+### Expert Parallelism (EP)
+
+For large MoE models, use expert parallelism:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-235B-A22B-Instruct \
+  --tp 8 \
+  --ep 8 \
+  --trust-remote-code
+```
+
+### Quantization
+
+Reduce memory usage with quantization:
+
+```bash
+# FP8 quantization
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-7B-Instruct \
+  --quantization fp8 \
+  --port 30000
+
+# AWQ quantization
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-7B-Instruct-AWQ \
+  --quantization awq \
+  --port 30000
+```
+
+### Chunked Prefill
+
+For long-context scenarios:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path Qwen/Qwen3-7B-Instruct \
+  --chunked-prefill-size 8192 \
+  --port 30000
+```
+
+## Accuracy Evaluation
+
+Evaluate model accuracy using `lm-eval`:
+
+```bash
+pip install lm-eval[api]
+
+lm_eval --model local-completions \
+  --model_args '{"base_url": "http://localhost:8000/v1/completions", "model": "Qwen/Qwen3.5-397B-A17B", "num_concurrent": 256, "max_retries": 10, "max_gen_toks": 2048}' \
+  --tasks gsm8k \
+  --batch_size auto \
+  --num_fewshot 5 \
+  --trust_remote_code
+```
+
+## Supported Qwen Architectures
+
+SGLang supports the following Qwen model architectures:
+
+- `Qwen3ForCausalLM` - Qwen 3 dense models
+- `Qwen3_5ForCausalLM` - Qwen 3.5 dense models
+- `Qwen3NextForCausalLM` - Qwen 3 Next generation
+- `Qwen3MoeForCausalLM` - Qwen 3 MoE models
+- `Qwen3OmniMoeForCausalLM` - Qwen 3 Omni models
+- `Qwen2ForCausalLM` - Qwen 2 dense models
+- `Qwen2MoeForCausalLM` - Qwen 2 MoE models
+- `Qwen2_5_VLForConditionalGeneration` - Qwen 2.5 VL
+- `Qwen3VLForConditionalGeneration` - Qwen 3 VL
+- `Qwen3VLMoeForConditionalGeneration` - Qwen 3 VL MoE
+- `Qwen2AudioForConditionalGeneration` - Qwen 2 Audio
+- `Qwen2ForSequenceClassification` - Classification
+- `Qwen3ForSequenceClassification` - Classification
+- `Qwen2ForRewardModel` - Reward models
+- `Qwen3ForRewardModel` - Reward models
+
+## Resources
+
+- [Qwen on Hugging Face](https://huggingface.co/Qwen)
+- [AMD Day 0 Support for Qwen 3.5](https://www.amd.com/en/developer/resources/technical-articles/2026/day-0-support-for-qwen-3-5-on-amd-instinct-gpus.html)
+- [Qwen Documentation](https://qwen.readthedocs.io/)
+
+## Troubleshooting
+
+### Large Model Loading Timeout
+
+Increase watchdog timeout:
+
+```bash
+--watchdog-timeout 1200  # 20 minutes
+```
+
+### Memory Issues with MoE
+
+Adjust memory fraction:
+
+```bash
+--mem-fraction-static 0.85  # Reduce from default 0.9
+```
+
+### AMD GPU Specific
+
+Ensure AITER is enabled:
+
+```bash
+SGLANG_USE_AITER=1 python3 -m sglang.launch_server ...
+```

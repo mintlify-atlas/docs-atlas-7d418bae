@@ -1,0 +1,149 @@
+---
+title: "@sglang.function"
+description: "Decorator for defining SGLang prompt programs"
+---
+
+## Overview
+
+The `@sglang.function` decorator converts a Python function into an SGLang prompt program that can be executed with language models.
+
+## Syntax
+
+```python
+@sglang.function
+def my_program(s, arg1, arg2, ...):
+    # Program body
+    pass
+```
+
+Or with parameters:
+
+```python
+@sglang.function(num_api_spec_tokens=100)
+def my_program(s, arg1, arg2, ...):
+    # Program body
+    pass
+```
+
+## Parameters
+
+<ParamField path="num_api_spec_tokens" type="int" optional>
+  Number of tokens to reserve for API specifications. Used for advanced features.
+</ParamField>
+
+## Function Requirements
+
+- The first parameter must be named `s` (the SGLang state object)
+- Additional parameters define the program's inputs
+- The function body contains prompt logic using SGLang primitives
+
+## Usage
+
+### Basic Definition
+
+```python
+import sglang as sgl
+
+@sgl.function
+def simple_qa(s, question):
+    s += sgl.user(question)
+    s += sgl.assistant(sgl.gen("answer", max_tokens=100))
+```
+
+### Running the Program
+
+```python
+state = simple_qa.run(question="What is the capital of France?")
+print(state["answer"])
+```
+
+### Batch Execution
+
+```python
+questions = [
+    {"question": "What is 2+2?"},
+    {"question": "What is the sky blue?"},
+]
+
+states = simple_qa.run_batch(questions)
+for state in states:
+    print(state["answer"])
+```
+
+## Methods
+
+### `.run()`
+
+Executes the program with a single input.
+
+**Parameters:**
+- All function arguments as keyword arguments
+- Sampling parameters: `max_new_tokens`, `temperature`, `top_p`, `top_k`, etc.
+- `backend`: Backend to use (defaults to global backend)
+- `stream`: Whether to stream results
+
+**Returns:** State object with generated outputs
+
+### `.run_batch()`
+
+Executes the program with multiple inputs in parallel.
+
+**Parameters:**
+- `batch_kwargs`: List of dictionaries, each containing function arguments
+- Sampling parameters (applied to all executions)
+- `num_threads`: Number of parallel threads
+- `progress_bar`: Show progress bar
+
+**Returns:** List of state objects
+
+### `.bind()`
+
+Partially binds arguments to create a new function.
+
+```python
+@sgl.function
+def greet(s, name, greeting="Hello"):
+    s += f"{greeting}, {name}!"
+
+friendly_greet = greet.bind(greeting="Hi")
+```
+
+### `.trace()`
+
+Traces the program execution for debugging.
+
+```python
+trace = simple_qa.trace(question="What is Python?")
+print(trace)
+```
+
+### `.cache()`
+
+Caches the program's prefix for faster repeated execution.
+
+```python
+simple_qa.cache()
+```
+
+## Example: Multi-turn Conversation
+
+```python
+@sgl.function
+def chatbot(s, user_msg, context):
+    s += sgl.system(context)
+    s += sgl.user(user_msg)
+    s += sgl.assistant(sgl.gen("response", max_tokens=200))
+
+state = chatbot.run(
+    user_msg="Tell me a joke",
+    context="You are a friendly comedian",
+    temperature=0.9
+)
+print(state["response"])
+```
+
+## See Also
+
+- [gen()](/api/frontend/gen) - Generate text from the model
+- [select()](/api/frontend/select) - Choose from predefined options
+- [Role markers](/api/frontend/roles) - Structure conversations

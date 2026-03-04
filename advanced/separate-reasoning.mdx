@@ -1,0 +1,312 @@
+---
+title: Separate Reasoning
+description: Parse and separate reasoning content from model outputs for reasoning models
+---
+
+SGLang supports parsing reasoning content (chain-of-thought) from final answers for reasoning models like DeepSeek-R1, DeepSeek-V3, Qwen3, and others. This enables you to display reasoning and final answers separately in your application.
+
+## Supported Models
+
+| Model | Reasoning Tags | Parser | Notes |
+|-------|----------------|--------|-------|
+| [DeepSeek-R1](https://huggingface.co/collections/deepseek-ai/deepseek-r1-678e1e131c0169c0bc89728d) | `<think>...</think>` | `deepseek-r1` | All variants (R1, R1-0528, R1-Distill) |
+| [DeepSeek-V3](https://huggingface.co/deepseek-ai/DeepSeek-V3.1) | `<think>...</think>` | `deepseek-v3` | Including V3.2. Supports `thinking` parameter |
+| [Qwen3](https://huggingface.co/collections/Qwen/qwen3-67dd247413f0e2e4f653967f) | `<think>...</think>` | `qwen3` | Supports `enable_thinking` parameter |
+| [Qwen3-Thinking](https://huggingface.co/Qwen/Qwen3-235B-A22B-Thinking-2507) | `<think>...</think>` | `qwen3` or `qwen3-thinking` | Always generates thinking |
+| [Kimi K2](https://huggingface.co/moonshotai/Kimi-K2-Thinking) | `◁think▷...◁/think▷` | `kimi_k2` | Also requires `--tool-call-parser kimi_k2` for tool use |
+| [GPT OSS](https://huggingface.co/openai/gpt-oss-120b) | `<\|channel\|>analysis<\|message\|>...<\|end\|>` | `gpt-oss` | Special analysis channel format |
+
+## Model-Specific Behaviors
+
+<AccordionGroup>
+  <Accordion title="DeepSeek-R1 Family">
+    - **DeepSeek-R1**: No `<think>` start tag, jumps directly to thinking content
+    - **DeepSeek-R1-0528**: Generates both `<think>` start and `</think>` end tags
+    - Both handled by the same `deepseek-r1` parser
+  </Accordion>
+  
+  <Accordion title="DeepSeek-V3 Family">
+    - **DeepSeek-V3.1/V3.2**: Hybrid model supporting both thinking and non-thinking modes
+    - Use the `deepseek-v3` parser and `thinking` parameter (NOT `enable_thinking`)
+  </Accordion>
+  
+  <Accordion title="Qwen3 Family">
+    - **Standard Qwen3** (e.g., Qwen3-2507): Use `qwen3` parser, supports `enable_thinking` in chat templates
+    - **Qwen3-Thinking** (e.g., Qwen3-235B-A22B-Thinking-2507): Use `qwen3` or `qwen3-thinking`, always thinks
+  </Accordion>
+  
+  <Accordion title="Kimi K2">
+    Uses special `◁think▷` and `◁/think▷` tags. For agentic tool use, also specify `--tool-call-parser kimi_k2`.
+  </Accordion>
+  
+  <Accordion title="GPT OSS">
+    Uses special `<|channel|>analysis<|message|>` and `<|end|>` tags for analysis content.
+  </Accordion>
+</AccordionGroup>
+
+## Quick Start
+
+### Launch Server
+
+```bash
+python -m sglang.launch_server \
+    --model-path deepseek-ai/DeepSeek-R1-Distill-Qwen-7B \
+    --reasoning-parser deepseek-r1
+```
+
+<Note>
+The `--reasoning-parser` argument specifies which parser to use for interpreting reasoning content in the model's output.
+</Note>
+
+### OpenAI-Compatible API
+
+The API follows the [DeepSeek API design](https://api-docs.deepseek.com/guides/reasoning_model) with:
+- `reasoning_content`: The chain-of-thought reasoning
+- `content`: The final answer
+
+#### Non-Streaming Request
+
+```python
+import openai
+
+client = openai.Client(base_url="http://localhost:30000/v1", api_key="None")
+
+response = client.chat.completions.create(
+    model="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    messages=[{"role": "user", "content": "What is 1+3?"}],
+    temperature=0.6,
+    stream=False,
+    extra_body={"separate_reasoning": True},
+)
+
+print("Reasoning:", response.choices[0].message.reasoning_content)
+print("Answer:", response.choices[0].message.content)
+```
+
+#### Streaming Request
+
+```python
+response = client.chat.completions.create(
+    model="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    messages=[{"role": "user", "content": "What is 1+3?"}],
+    temperature=0.6,
+    stream=True,
+    extra_body={"separate_reasoning": True},
+)
+
+reasoning_content = ""
+content = ""
+
+for chunk in response:
+    if chunk.choices[0].delta.reasoning_content:
+        reasoning_content += chunk.choices[0].delta.reasoning_content
+    if chunk.choices[0].delta.content:
+        content += chunk.choices[0].delta.content
+
+print("Reasoning:", reasoning_content)
+print("Answer:", content)
+```
+
+### Buffered Streaming
+
+Buffer reasoning content until complete, then stream it in one chunk:
+
+```python
+response = client.chat.completions.create(
+    model="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    messages=[{"role": "user", "content": "What is 1+3?"}],
+    temperature=0.6,
+    stream=True,
+    extra_body={
+        "separate_reasoning": True,
+        "stream_reasoning": False,  # Buffer reasoning
+    },
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.reasoning_content:
+        # Reasoning arrives in one chunk after completion
+        print("Complete reasoning:", chunk.choices[0].delta.reasoning_content)
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### Disable Reasoning Separation
+
+To get the raw output with reasoning tags:
+
+```python
+response = client.chat.completions.create(
+    model="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    messages=[{"role": "user", "content": "What is 1+3?"}],
+    temperature=0.6,
+    extra_body={"separate_reasoning": False},
+)
+
+print(response.choices[0].message.content)
+# Output includes: <think>reasoning...</think>answer
+```
+
+## Native API Usage
+
+You can also use the native SGLang API:
+
+### Generate with Native API
+
+```python
+import requests
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B")
+messages = [{"role": "user", "content": "What is 1+3?"}]
+
+input_text = tokenizer.apply_chat_template(
+    messages, tokenize=False, add_generation_prompt=True
+)
+
+response = requests.post(
+    "http://localhost:30000/generate",
+    json={
+        "text": input_text,
+        "sampling_params": {
+            "skip_special_tokens": False,
+            "max_new_tokens": 1024,
+            "temperature": 0.6,
+        },
+    },
+)
+
+generated_text = response.json()["text"]
+print("Raw output:", generated_text)
+```
+
+### Parse Reasoning
+
+```python
+parse_response = requests.post(
+    "http://localhost:30000/separate_reasoning",
+    json={
+        "text": generated_text,
+        "reasoning_parser": "deepseek-r1",
+    },
+)
+
+result = parse_response.json()
+print("Reasoning:", result["reasoning_text"])
+print("Answer:", result["text"])
+```
+
+## Parser Details
+
+### DeepSeek-R1 Parser
+
+Handles both tag variants:
+- Models that omit `<think>` start tag
+- Models that include both `<think>` and `</think>` tags
+
+### DeepSeek-V3 Parser
+
+Supports hybrid thinking mode controlled by the `thinking` parameter:
+
+```python
+response = client.chat.completions.create(
+    model="deepseek-ai/DeepSeek-V3.1",
+    messages=[{"role": "user", "content": "Solve this problem..."}],
+    extra_body={
+        "thinking": True,  # Enable thinking mode
+        "separate_reasoning": True,
+    },
+)
+```
+
+### Qwen3 Parser
+
+Standard Qwen3 models support `enable_thinking` in the chat template:
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-2507")
+messages = [{"role": "user", "content": "Solve..."}]
+
+input_text = tokenizer.apply_chat_template(
+    messages,
+    tokenize=False,
+    add_generation_prompt=True,
+    enable_thinking=True,  # Enable thinking mode
+)
+```
+
+### Kimi K2 Parser
+
+Uses Unicode triangle characters for thinking delimiters:
+
+```bash
+python -m sglang.launch_server \
+    --model-path moonshotai/Kimi-K2-Thinking \
+    --reasoning-parser kimi_k2 \
+    --tool-call-parser kimi_k2  # Also needed for tool use
+```
+
+## Implementation Details
+
+Reasoning parsing is implemented through specialized parser classes that:
+
+1. **Detect reasoning boundaries** - Identify start and end tags in the output stream
+2. **Extract reasoning content** - Separate thinking from final answer
+3. **Handle streaming** - Support both buffered and unbuffered streaming modes
+4. **Format responses** - Map to OpenAI-compatible response format
+
+Parsers are registered in the function call system:
+
+```python
+# From python/sglang/srt/function_call/function_call_parser.py:48
+ToolCallParserEnum = {
+    "deepseekv3": DeepSeekV3Detector,
+    "deepseekv31": DeepSeekV31Detector,
+    "kimi_k2": KimiK2Detector,
+    "qwen": Qwen25Detector,
+    "gpt-oss": GptOssDetector,
+    # ...
+}
+```
+
+Source: `python/sglang/srt/function_call/function_call_parser.py:48`
+
+## Configuration Options
+
+| Parameter | Description | Default |
+|-----------|-------------|----------|
+| `--reasoning-parser` | Parser to use for reasoning content | `None` |
+| `separate_reasoning` | Enable reasoning separation in requests | `True` (when parser set) |
+| `stream_reasoning` | Stream reasoning incrementally vs buffered | `True` |
+
+## Performance Considerations
+
+<AccordionGroup>
+  <Accordion title="Streaming Modes">
+    - **Unbuffered (`stream_reasoning=True`)**: Lower latency, reasoning appears token-by-token
+    - **Buffered (`stream_reasoning=False`)**: Better UX for long reasoning, appears all at once
+  </Accordion>
+  
+  <Accordion title="Parser Overhead">
+    Parsing adds minimal overhead (&lt;1ms per request). The parser operates on the output stream and does not affect generation speed.
+  </Accordion>
+</AccordionGroup>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Debugging" icon="bug">
+    Display reasoning to understand model's decision process
+  </Card>
+  <Card title="Educational Tools" icon="graduation-cap">
+    Show step-by-step problem solving
+  </Card>
+  <Card title="Transparency" icon="eye">
+    Provide visibility into AI reasoning for high-stakes decisions
+  </Card>
+  <Card title="Analysis" icon="chart-line">
+    Log and analyze reasoning patterns
+  </Card>
+</CardGroup>

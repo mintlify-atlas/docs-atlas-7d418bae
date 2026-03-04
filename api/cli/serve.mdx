@@ -1,0 +1,314 @@
+---
+title: sglang serve
+description: Launch the SGLang server for language models or diffusion models
+---
+
+## Overview
+
+The `sglang serve` command launches a server for serving language models or diffusion models. The server type is automatically determined based on the model path, or can be explicitly specified using the `--model-type` flag.
+
+## Basic Usage
+
+```bash
+sglang serve --model-path <model-name-or-path> [options]
+```
+
+## Required Arguments
+
+<ParamField path="--model-path" type="string" required>
+  Path or name of the model to serve. Can be:
+  - HuggingFace model ID (e.g., `meta-llama/Llama-2-7b-hf`)
+  - Local path to model directory
+  - ModelScope model ID (when using `SGLANG_USE_MODELSCOPE=1`)
+</ParamField>
+
+## Server Type Selection
+
+<ParamField path="--model-type" type="string" default="auto">
+  Override automatic model type detection. Options:
+  - `auto`: Automatically detect model type (default)
+  - `llm`: Force standard language model server
+  - `diffusion`: Force diffusion model server
+</ParamField>
+
+## Model Auto-Detection
+
+SGLang automatically detects whether to launch a standard language model server or a diffusion model server based on:
+
+1. For local directories: Checks for `model_index.json` with `_diffusers_version` field
+2. For remote models: Attempts to download `model_index.json` from HuggingFace/ModelScope
+3. Falls back to language model server on detection failure
+
+## Language Model Server Options
+
+### Model and Tokenizer
+
+<ParamField path="--tokenizer-path" type="string">
+  Path to the tokenizer. Defaults to `--model-path` if not specified.
+</ParamField>
+
+<ParamField path="--tokenizer-mode" type="string" default="auto">
+  Tokenizer mode. Options: `auto`, `slow`.
+</ParamField>
+
+<ParamField path="--trust-remote-code" type="boolean" default="false">
+  Trust remote code from HuggingFace.
+</ParamField>
+
+<ParamField path="--load-format" type="string" default="auto">
+  Model loading format. Options: `auto`, `pt`, `safetensors`, `npcache`, `dummy`, `sharded_state`, `gguf`, `bitsandbytes`, `layered`, `flash_rl`, `remote`, `remote_instance`, `fastsafetensors`, `private`.
+</ParamField>
+
+<ParamField path="--revision" type="string">
+  Model revision (branch/tag name or commit ID).
+</ParamField>
+
+### HTTP Server
+
+<ParamField path="--host" type="string" default="127.0.0.1">
+  Server host address.
+</ParamField>
+
+<ParamField path="--port" type="integer" default="30000">
+  Server port.
+</ParamField>
+
+<ParamField path="--api-key" type="string">
+  API key for authentication.
+</ParamField>
+
+### Quantization
+
+<ParamField path="--quantization" type="string">
+  Quantization method. Options: `awq`, `fp8`, `mxfp8`, `gptq`, `marlin`, `gptq_marlin`, `awq_marlin`, `bitsandbytes`, `gguf`, `modelopt`, `modelopt_fp8`, `modelopt_fp4`, `petit_nvfp4`, `w8a8_int8`, `w8a8_fp8`, `moe_wna16`, `qoq`, `w4afp8`, `mxfp4`, `auto-round`, `compressed-tensors`, `modelslim`, `quark_int4fp8_moe`.
+</ParamField>
+
+<ParamField path="--dtype" type="string" default="auto">
+  Data type for model weights. Options: `auto`, `float16`, `bfloat16`, `float32`.
+</ParamField>
+
+<ParamField path="--kv-cache-dtype" type="string" default="auto">
+  Data type for KV cache. Options: `auto`, `fp8_e4m3`, `fp8_e5m2`, `bfloat16`.
+</ParamField>
+
+### Memory and Scheduling
+
+<ParamField path="--mem-fraction-static" type="float">
+  Fraction of GPU memory to use for model weights and KV cache.
+</ParamField>
+
+<ParamField path="--max-total-tokens" type="integer">
+  Maximum total number of tokens in the batch.
+</ParamField>
+
+<ParamField path="--chunked-prefill-size" type="integer">
+  Chunk size for chunked prefill. Default varies by GPU memory (2048-16384).
+</ParamField>
+
+<ParamField path="--max-prefill-tokens" type="integer" default="16384">
+  Maximum number of tokens in a prefill batch.
+</ParamField>
+
+<ParamField path="--schedule-policy" type="string" default="fcfs">
+  Scheduling policy. Options: `fcfs` (first-come-first-serve).
+</ParamField>
+
+### Parallelism
+
+<ParamField path="--tp-size" type="integer" default="1">
+  Tensor parallelism size.
+</ParamField>
+
+<ParamField path="--dp-size" type="integer" default="1">
+  Data parallelism size.
+</ParamField>
+
+<ParamField path="--pp-size" type="integer" default="1">
+  Pipeline parallelism size.
+</ParamField>
+
+### Attention Backend
+
+<ParamField path="--attention-backend" type="string">
+  Attention backend. Options: `triton`, `torch_native`, `flex_attention`, `nsa`, `cutlass_mla`, `fa3`, `fa4`, `flashinfer`, `flashmla`, `trtllm_mla`, `trtllm_mha`, `dual_chunk_flash_attn`, `aiter`, `wave`, `intel_amx`, `ascend`, `intel_xpu`.
+</ParamField>
+
+### LoRA
+
+<ParamField path="--enable-lora" type="boolean">
+  Enable LoRA adapters.
+</ParamField>
+
+<ParamField path="--max-lora-rank" type="integer">
+  Maximum LoRA rank.
+</ParamField>
+
+<ParamField path="--lora-paths" type="string">
+  Paths to LoRA adapters.
+</ParamField>
+
+### Speculative Decoding
+
+<ParamField path="--speculative-algorithm" type="string">
+  Speculative decoding algorithm. Options: `EAGLE`, `MEDUSA`, `STANDALONE`, `NGRAM`.
+</ParamField>
+
+<ParamField path="--speculative-draft-model-path" type="string">
+  Path to the draft model for speculative decoding.
+</ParamField>
+
+<ParamField path="--speculative-num-steps" type="integer">
+  Number of speculative decoding steps.
+</ParamField>
+
+### Logging
+
+<ParamField path="--log-level" type="string" default="info">
+  Logging level. Options: `debug`, `info`, `warning`, `error`.
+</ParamField>
+
+<ParamField path="--log-requests" type="boolean" default="false">
+  Log all requests.
+</ParamField>
+
+<ParamField path="--enable-metrics" type="boolean" default="false">
+  Enable Prometheus metrics.
+</ParamField>
+
+## Diffusion Model Server Options
+
+When serving diffusion models, additional options are available:
+
+### Parallelism
+
+<ParamField path="--num-gpus" type="integer" default="1">
+  Number of GPUs to use.
+</ParamField>
+
+<ParamField path="--sp-degree" type="integer">
+  Sequence parallelism degree.
+</ParamField>
+
+<ParamField path="--ulysses-degree" type="integer">
+  Ulysses sequence parallelism degree.
+</ParamField>
+
+<ParamField path="--ring-degree" type="integer">
+  Ring sequence parallelism degree.
+</ParamField>
+
+### Attention
+
+<ParamField path="--attention-backend" type="string">
+  Attention backend for diffusion models.
+</ParamField>
+
+<ParamField path="--cache-dit-config" type="string">
+  Cache-DIT configuration for diffusers.
+</ParamField>
+
+### Offloading
+
+<ParamField path="--dit-cpu-offload" type="boolean">
+  Offload DiT model to CPU.
+</ParamField>
+
+<ParamField path="--vae-cpu-offload" type="boolean">
+  Offload VAE to CPU.
+</ParamField>
+
+<ParamField path="--text-encoder-cpu-offload" type="boolean">
+  Offload text encoder to CPU.
+</ParamField>
+
+### Backend
+
+<ParamField path="--backend" type="string" default="auto">
+  Model backend. Options: `auto`, `sglang`, `diffusers`.
+</ParamField>
+
+## Examples
+
+### Serve a Language Model
+
+```bash
+# Basic usage
+sglang serve --model-path meta-llama/Llama-2-7b-hf
+
+# With custom port and tensor parallelism
+sglang serve --model-path meta-llama/Llama-2-70b-hf \
+  --port 8080 \
+  --tp-size 4
+
+# With quantization
+sglang serve --model-path meta-llama/Llama-2-7b-hf \
+  --quantization awq
+
+# With LoRA adapters
+sglang serve --model-path meta-llama/Llama-2-7b-hf \
+  --enable-lora \
+  --max-lora-rank 64
+```
+
+### Serve a Diffusion Model
+
+```bash
+# Basic diffusion model serving
+sglang serve --model-path stabilityai/stable-diffusion-xl-base-1.0
+
+# With custom parallelism
+sglang serve --model-path stabilityai/stable-diffusion-xl-base-1.0 \
+  --num-gpus 4 \
+  --sp-degree 2
+
+# Force diffusion model type
+sglang serve --model-path custom/model \
+  --model-type diffusion
+```
+
+### Advanced Configuration
+
+```bash
+# High-performance setup with chunked prefill and CUDA graphs
+sglang serve --model-path meta-llama/Llama-2-70b-hf \
+  --tp-size 8 \
+  --chunked-prefill-size 8192 \
+  --max-total-tokens 32768 \
+  --enable-metrics
+
+# With speculative decoding
+sglang serve --model-path meta-llama/Llama-2-70b-hf \
+  --speculative-algorithm EAGLE \
+  --speculative-draft-model-path meta-llama/Llama-2-7b-hf \
+  --speculative-num-steps 5
+```
+
+## Output
+
+When the server starts successfully, you'll see output similar to:
+
+```
+INFO: Started server process [12345]
+INFO: Waiting for application startup.
+INFO: Application startup complete.
+INFO: Uvicorn running on http://127.0.0.1:30000 (Press CTRL+C to quit)
+```
+
+## Help
+
+To see all available options:
+
+```bash
+sglang serve --help
+```
+
+Note: Since the exact help depends on the model type, provide a model path to see specific options:
+
+```bash
+sglang serve --model-path meta-llama/Llama-2-7b-hf --help
+```
+
+## Related Commands
+
+- [sglang generate](/api/cli/generate) - Run inference on a multimodal model
+- [sglang version](/api/cli/version) - Show version information

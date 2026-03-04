@@ -1,0 +1,609 @@
+---
+title: "Prefill-Decode Disaggregation"
+description: "Separate prefill and decode phases for optimized resource utilization"
+---
+
+## Overview
+
+Prefill-Decode (PD) Disaggregation separates LLM inference into two specialized instances:
+- **Prefill instance:** Handles computation-intensive prompt processing
+- **Decode instance:** Handles memory-intensive token generation
+
+This separation eliminates interference between phases and enables tailored optimizations for each.
+
+## Why PD Disaggregation?
+
+Traditional unified engines that process prefill and decode together suffer from two key inefficiencies:
+
+### Problem 1: Prefill Interruption
+
+Incoming prefill batches frequently interrupt ongoing decode batches, causing substantial delays in token generation.
+
+```
+Unified Engine:
+[Decode] [Decode] [Prefill!] ← interrupts → [Wait...] [Decode] [Decode]
+                     ↓
+              Decode latency spike
+```
+
+### Problem 2: DP Attention Imbalance
+
+In data-parallel attention, one DP worker may process prefill while another handles decode simultaneously, leading to increased decode latency.
+
+```
+Unified DP Workers:
+Worker 0: [Prefill ----------------]  ← compute-bound
+Worker 1: [Decode]  ← waits for Worker 0
+```
+
+### Solution: Disaggregation
+
+With PD disaggregation:
+
+```
+Prefill Instance:
+[Prefill] [Prefill] [Prefill] [Prefill]  ← continuous prefill processing
+    ↓          ↓          ↓          ↓
+  Transfer KV cache to decode instance
+
+Decode Instance:
+[Decode] [Decode] [Decode] [Decode]  ← uninterrupted token generation
+```
+
+**Benefits:**
+- No prefill interruption of decode batches
+- Balanced DP attention workloads
+- Independent optimization per phase
+- Better resource utilization
+
+## Architecture
+
+### Request Flow
+
+```
+Client Request
+      ↓
+   Router
+      ↓
+Prefill Instance
+      ↓ (KV Cache Transfer)
+Decode Instance
+      ↓
+Generated Tokens → Client
+```
+
+### Prefill Instance Lifecycle
+
+1. **Bootstrap Queue:**
+   - Initialize sender for each request
+   - Handshake with decode instance
+   - Pre-allocate KV cache on decode side
+   - Move to Waiting Queue once complete
+
+2. **Waiting Queue:**
+   - Pop requests for prefill forward pass
+   - Process through model
+   - Move to Inflight Queue
+
+3. **Inflight Queue:**
+   - Non-blocking poll of transfer status
+   - Return request once KV cache transfer completes
+
+### Decode Instance Lifecycle
+
+1. **Prealloc Queue:**
+   - Initialize receiver for each request
+   - Handshake with prefill instance
+   - Pre-allocate KV cache slots
+   - Move to Transfer Queue
+
+2. **Transfer Queue:**
+   - Poll receiver for transfer status
+   - Move to Waiting Queue once transfer completes
+
+3. **Waiting Queue:**
+   - Construct PrebuiltExtendBatch
+   - Populate metadata (skip prefill forward)
+
+4. **Running Batch:**
+   - Merge resolved batch into running batch
+   - Execute decode forward passes
+
+## Transfer Backends
+
+SGLang supports multiple KV cache transfer backends:
+
+| Backend | Description | Best For |
+|---------|-------------|----------|
+| **Mooncake** | RDMA-based high-performance transfers | Multi-node, InfiniBand/RoCE |
+| **NIXL** | UCX/libfabric plugin system | Flexible multi-node |
+| **Ascend** | Huawei Ascend NPU transfers | Ascend NPU deployments |
+| **Fake** | No actual transfer (testing) | Single-node debugging |
+
+## Configuration
+
+### Basic Setup with Mooncake (Single Node)
+
+**Installation:**
+```bash
+uv pip install mooncake-transfer-engine
+```
+
+**Launch servers:**
+```bash
+# Prefill instance
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --port 30000 \
+  --disaggregation-ib-device mlx5_roce0
+
+# Decode instance
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode decode \
+  --port 30001 \
+  --base-gpu-id 1 \
+  --disaggregation-ib-device mlx5_roce0
+
+# Router
+python -m sglang_router.launch_router \
+  --pd-disaggregation \
+  --prefill http://127.0.0.1:30000 \
+  --decode http://127.0.0.1:30001 \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+### Multi-Node Setup (DeepSeek-V3)
+
+```bash
+# Prefill Node 0
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3-0324 \
+  --disaggregation-ib-device mlx5_roce0 \
+  --disaggregation-mode prefill \
+  --host 192.168.1.10 \
+  --port 30000 \
+  --trust-remote-code \
+  --dist-init-addr 192.168.1.10:5000 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --tp-size 16 \
+  --dp-size 8 \
+  --enable-dp-attention \
+  --moe-a2a-backend deepep \
+  --mem-fraction-static 0.8
+
+# Prefill Node 1
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3-0324 \
+  --disaggregation-ib-device mlx5_roce0 \
+  --disaggregation-mode prefill \
+  --host 192.168.1.11 \
+  --port 30000 \
+  --trust-remote-code \
+  --dist-init-addr 192.168.1.10:5000 \
+  --nnodes 2 \
+  --node-rank 1 \
+  --tp-size 16 \
+  --dp-size 8 \
+  --enable-dp-attention \
+  --moe-a2a-backend deepep \
+  --mem-fraction-static 0.8
+
+# Decode Node 0
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3-0324 \
+  --disaggregation-ib-device mlx5_roce0 \
+  --disaggregation-mode decode \
+  --host 192.168.1.20 \
+  --port 30001 \
+  --trust-remote-code \
+  --dist-init-addr 192.168.1.20:5000 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --tp-size 16 \
+  --dp-size 8 \
+  --enable-dp-attention \
+  --moe-a2a-backend deepep \
+  --mem-fraction-static 0.8 \
+  --max-running-requests 128
+
+# Decode Node 1
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3-0324 \
+  --disaggregation-ib-device mlx5_roce0 \
+  --disaggregation-mode decode \
+  --host 192.168.1.21 \
+  --port 30001 \
+  --trust-remote-code \
+  --dist-init-addr 192.168.1.20:5000 \
+  --nnodes 2 \
+  --node-rank 1 \
+  --tp-size 16 \
+  --dp-size 8 \
+  --enable-dp-attention \
+  --moe-a2a-backend deepep \
+  --mem-fraction-static 0.8 \
+  --max-running-requests 128
+```
+
+## Transfer Backend Details
+
+### Mooncake
+
+**Requirements:**
+```bash
+uv pip install mooncake-transfer-engine
+```
+
+**Features:**
+- RDMA-based high-performance transfers
+- NVLink support (recommended for NVL72)
+- Custom memory pools for optimized transfers
+
+**NVLink Transport:**
+
+```bash
+export SGLANG_MOONCAKE_CUSTOM_MEM_POOL=NVLINK
+export MC_FORCE_MNNVL=True
+
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --disaggregation-ib-device mlx5_roce0
+```
+
+Supported memory pools:
+- `NVLINK` (or `True`): NVLink transport
+- `BAREX`: BAR expansion
+- `INTRA_NODE_NVLINK`: Intra-node NVLink
+
+**Environment Variables:**
+
+**Prefill Server:**
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `SGLANG_DISAGGREGATION_THREAD_POOL_SIZE` | Worker threads per TP rank | `int(0.75 * cpu_count) // 8` (4-12) |
+| `SGLANG_DISAGGREGATION_QUEUE_SIZE` | Parallel transfer queues | `4` |
+| `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT` | Bootstrap timeout (seconds) | `300` |
+| `SGLANG_DISAGGREGATION_BOOTSTRAP_ENTRY_CLEANUP_INTERVAL` | Cleanup interval (seconds) | `120` |
+
+**Decode Server:**
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `SGLANG_DISAGGREGATION_HEARTBEAT_INTERVAL` | Heartbeat interval (seconds) | `5.0` |
+| `SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE` | Max consecutive failures | `2` |
+| `SGLANG_DISAGGREGATION_WAITING_TIMEOUT` | KV cache wait timeout (seconds) | `300` |
+
+**Example (relaxed timeouts for high TTFT):**
+```bash
+export SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=600
+export SGLANG_DISAGGREGATION_WAITING_TIMEOUT=600
+```
+
+### NIXL
+
+**Installation:**
+```bash
+pip install nixl
+```
+
+Or build from source (if UCX is pre-installed):
+```bash
+git clone https://github.com/ai-dynamo/nixl.git
+cd nixl
+pip install . --config-settings=setup-args="-Ducx_path=/path/to/ucx"
+```
+
+**Single Node:**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --port 30000 \
+  --disaggregation-transfer-backend nixl
+
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode decode \
+  --port 30001 \
+  --base-gpu-id 1 \
+  --disaggregation-transfer-backend nixl
+
+python -m sglang_router.launch_router \
+  --pd-disaggregation \
+  --prefill http://127.0.0.1:30000 \
+  --decode http://127.0.0.1:30001 \
+  --host 0.0.0.0 --port 8000
+```
+
+**Multi-Node:** (same as Mooncake, replace `--disaggregation-ib-device` with `--disaggregation-transfer-backend nixl`)
+
+**Backend Selection:**
+
+```bash
+export SGLANG_DISAGGREGATION_NIXL_BACKEND=LIBFABRIC
+# Available: UCX (default), LIBFABRIC, or any installed NIXL plugin
+
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --disaggregation-transfer-backend nixl \
+  --port 30000
+```
+
+### Ascend NPU
+
+**Requirements:**
+
+**Option 1: Memfabric Hybrid**
+```bash
+pip install memfabric-hybrid==1.0.0
+export ASCEND_MF_STORE_URL="tcp://192.168.1.1:50000"
+```
+
+**Option 2: Mooncake**
+```bash
+export ENABLE_ASCEND_TRANSFER_WITH_MOONCAKE=true
+```
+
+**Set NPU Physical ID (required in containers):**
+```bash
+export ASCEND_NPU_PHY_ID=0
+```
+
+**Single Node:**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --port 30000 \
+  --disaggregation-transfer-backend ascend
+
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode decode \
+  --port 30001 \
+  --base-gpu-id 1 \
+  --disaggregation-transfer-backend ascend
+
+python -m sglang_router.launch_router \
+  --pd-disaggregation \
+  --prefill http://127.0.0.1:30000 \
+  --decode http://127.0.0.1:30001 \
+  --host 0.0.0.0 --port 8000
+```
+
+**Multi-Node (DeepSeek):**
+```bash
+# Prefill Node 0
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3-0324 \
+  --disaggregation-transfer-backend ascend \
+  --disaggregation-mode prefill \
+  --host 192.168.1.10 \
+  --port 30000 \
+  --trust-remote-code \
+  --dist-init-addr 192.168.1.10:5000 \
+  --nnodes 1 \
+  --node-rank 0 \
+  --tp-size 16
+
+# Decode Node 0
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3-0324 \
+  --disaggregation-transfer-backend ascend \
+  --disaggregation-mode decode \
+  --host 192.168.1.20 \
+  --port 30001 \
+  --trust-remote-code \
+  --dist-init-addr 192.168.1.20:5000 \
+  --nnodes 1 \
+  --node-rank 0 \
+  --tp-size 16
+```
+
+## Combining with Other Parallelism
+
+### PD + TP + DP + EP (Full Stack)
+
+Recommended production setup for DeepSeek-V3:
+
+```bash
+# Prefill instance
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --disaggregation-mode prefill \
+  --tp 16 --dp-size 8 --ep 16 \
+  --enable-dp-attention \
+  --moe-a2a-backend deepep \
+  --disaggregation-ib-device mlx5_roce0
+
+# Decode instance
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --disaggregation-mode decode \
+  --tp 16 --dp-size 8 --ep 16 \
+  --enable-dp-attention \
+  --moe-a2a-backend deepep \
+  --disaggregation-ib-device mlx5_roce0 \
+  --max-running-requests 128
+```
+
+### PD + Pipeline Parallelism
+
+```bash
+# Prefill instance with PP
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3.1 \
+  --disaggregation-mode prefill \
+  --tp 8 --pp-size 4 \
+  --nnodes 4 --node-rank 0 \
+  --dist-init-addr 192.168.1.10:29500 \
+  --chunked-prefill-size 4096 \
+  --disaggregation-ib-device mlx5_roce0
+
+# Decode instance with PP
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3.1 \
+  --disaggregation-mode decode \
+  --tp 8 --pp-size 4 \
+  --nnodes 4 --node-rank 0 \
+  --dist-init-addr 192.168.1.20:29500 \
+  --disaggregation-ib-device mlx5_roce0
+```
+
+See [Pipeline Parallelism](/distributed/pipeline-parallelism) for PP tuning details.
+
+## Router Integration
+
+SGLang Model Gateway provides load balancing and fault tolerance for PD disaggregation:
+
+**Multiple prefill/decode instances:**
+```bash
+# Launch prefill instances
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --port 30000 --host 0.0.0.0
+
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --port 30001 --host 0.0.0.0
+
+# Launch decode instances
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode decode \
+  --port 30010 --host 0.0.0.0
+
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode decode \
+  --port 30011 --host 0.0.0.0
+
+# Launch router with multiple workers
+python -m sglang_router.launch_router \
+  --pd-disaggregation \
+  --prefill http://localhost:30000 http://localhost:30001 \
+  --decode http://localhost:30010 http://localhost:30011 \
+  --host 0.0.0.0 --port 8000
+```
+
+See [SGLang Model Gateway - PD Disaggregation](https://docs.sglang.io/advanced_features/sgl_model_gateway.html#prefill-decode-disaggregation) for advanced routing policies.
+
+## Profiling
+
+To profile prefill or decode workers separately:
+
+```bash
+# Profile prefill instance
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --profile-prefill  # or set SGLANG_PROFILE_PREFILL=1
+
+# Profile decode instance
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode decode \
+  --profile-decode  # or set SGLANG_PROFILE_DECODE=1
+```
+
+See [Benchmark and Profiling Guide](https://docs.sglang.io/developer_guide/benchmark_and_profiling.html#profile-in-pd-disaggregation-mode) for details.
+
+## Configuration Summary
+
+| Parameter | Description | Default | Recommended |
+|-----------|-------------|---------|-------------|
+| `--disaggregation-mode` | Instance mode | `None` | `prefill` or `decode` |
+| `--disaggregation-transfer-backend` | Transfer backend | `mooncake` | `mooncake` or `nixl` |
+| `--disaggregation-ib-device` | InfiniBand device | `None` | Your IB device name |
+| `--max-running-requests` | Max concurrent (decode) | `None` | 128-256 |
+| `SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT` | Bootstrap timeout | `300` | 600 for high TTFT |
+| `SGLANG_MOONCAKE_CUSTOM_MEM_POOL` | Custom memory pool | `None` | `NVLINK` for NVL72 |
+
+## Best Practices
+
+1. **Use Mooncake for multi-node** deployments with InfiniBand/RoCE
+2. **Enable NVLink transport** for NVL72 deployments
+3. **Set appropriate timeouts** based on your TTFT requirements
+4. **Use router** for load balancing across multiple instances
+5. **Monitor transfer bandwidth** to ensure optimal performance
+6. **Profile instances separately** using profiling flags
+7. **Combine with DPA + EP** for DeepSeek models
+
+## Troubleshooting
+
+### Transfer Timeout
+
+**Symptom:** Requests timing out during KV cache transfer
+
+**Solution:** Increase timeouts:
+```bash
+export SGLANG_DISAGGREGATION_BOOTSTRAP_TIMEOUT=600
+export SGLANG_DISAGGREGATION_WAITING_TIMEOUT=600
+```
+
+### Bootstrap Connection Failed
+
+**Symptom:** Decode instance can't connect to prefill bootstrap server
+
+**Solution:** Check network connectivity and IB device:
+```bash
+# Verify IB device
+ibstat
+
+# Check host/port accessibility
+telnet <prefill_host> <bootstrap_port>
+
+# Ensure correct device name
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disaggregation-mode prefill \
+  --disaggregation-ib-device mlx5_roce0  # Match your device
+```
+
+### Low Transfer Bandwidth
+
+**Symptom:** Slow KV cache transfers
+
+**Solution:** Enable NVLink transport (if available):
+```bash
+export SGLANG_MOONCAKE_CUSTOM_MEM_POOL=NVLINK
+export MC_FORCE_MNNVL=True
+```
+
+Or increase thread pool size:
+```bash
+export SGLANG_DISAGGREGATION_THREAD_POOL_SIZE=12
+```
+
+### Memory Cleanup Issues
+
+**Symptom:** Memory not released after decode instance disconnects
+
+**Solution:** Adjust cleanup interval:
+```bash
+export SGLANG_DISAGGREGATION_BOOTSTRAP_ENTRY_CLEANUP_INTERVAL=60  # Clean up every 60s
+```
+
+## Performance Tips
+
+1. **Use RDMA** (InfiniBand/RoCE) for multi-node transfers
+2. **Enable NVLink** for intra-node high-bandwidth transfers
+3. **Tune thread pool size** based on available CPU cores
+4. **Adjust queue size** for concurrent transfer batches
+5. **Monitor heartbeat failures** to detect network issues early
+6. **Use multiple decode instances** with router for high availability
+
+## Related Documentation
+
+- [SGLang Model Gateway](https://docs.sglang.io/advanced_features/sgl_model_gateway.html) - Router for PD disaggregation
+- [Data Parallelism](/distributed/data-parallelism) - DPA for MLA models
+- [Expert Parallelism](/distributed/expert-parallelism) - EP for MoE models
+- [Pipeline Parallelism](/distributed/pipeline-parallelism) - PP with PD disaggregation
+- [Benchmark and Profiling](https://docs.sglang.io/developer_guide/benchmark_and_profiling.html) - Profiling guide

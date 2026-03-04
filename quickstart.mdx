@@ -1,80 +1,494 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Launch an SGLang server and make your first API request in minutes
 ---
 
-## Get started in three steps
+This guide will help you launch an SGLang server and send your first requests using both the OpenAI-compatible API and the native SGLang API.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Install SGLang">
+    First, install SGLang using pip or uv:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    pip install --upgrade pip
+    pip install uv
+    uv pip install sglang
+    ```
 
-### Step 2: Deploy your changes
+    See the [Installation Guide](/installation) for other installation methods.
+  </Step>
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
+  <Step title="Verify Installation">
+    ```bash
+    python -c "import sglang; print(sglang.__version__)"
+    ```
+  </Step>
+</Steps>
+
+## Launch Your First Server
+
+<Steps>
+  <Step title="Start the SGLang server">
+    Launch a server with a small model for testing:
+
+    ```bash
+    python -m sglang.launch_server \
+      --model-path meta-llama/Llama-3.1-8B-Instruct \
+      --host 127.0.0.1 \
+      --port 30000
+    ```
+
+    <Info>
+      The server will download the model from Hugging Face on first launch. Set the `HF_TOKEN` environment variable if you need to access gated models:
+      ```bash
+      export HF_TOKEN=your_huggingface_token
+      ```
+    </Info>
+
+    <Accordion title="Common Server Launch Options">
+      <CodeGroup>
+        ```bash Multi-GPU (Tensor Parallelism)
+        python -m sglang.launch_server \
+          --model-path meta-llama/Llama-3.1-8B-Instruct \
+          --tp 2
+        ```
+
+        ```bash Reduce Memory Usage
+        python -m sglang.launch_server \
+          --model-path meta-llama/Llama-3.1-8B-Instruct \
+          --mem-fraction-static 0.7
+        ```
+
+        ```bash FP8 Quantization
+        python -m sglang.launch_server \
+          --model-path meta-llama/Llama-3.1-8B-Instruct \
+          --quantization fp8
+        ```
+
+        ```bash Docker
+        docker run --gpus all \
+          --shm-size 32g \
+          -p 30000:30000 \
+          -v ~/.cache/huggingface:/root/.cache/huggingface \
+          --env "HF_TOKEN=<secret>" \
+          --ipc=host \
+          lmsysorg/sglang:latest \
+          python3 -m sglang.launch_server \
+          --model-path meta-llama/Llama-3.1-8B-Instruct \
+          --host 0.0.0.0 \
+          --port 30000
+        ```
+      </CodeGroup>
+    </Accordion>
+  </Step>
+
+  <Step title="Wait for the server to be ready">
+    Look for the following message in the logs:
+
+    ```
+    INFO:     Started server process
+    INFO:     Waiting for application startup.
+    INFO:     Application startup complete.
+    INFO:     Uvicorn running on http://127.0.0.1:30000
+    ```
+  </Step>
+</Steps>
+
+## Send Your First Request
+
+### Using OpenAI-Compatible API
+
+SGLang provides OpenAI-compatible endpoints, making it easy to integrate with existing applications.
+
+<CodeGroup>
+  ```python Python (OpenAI SDK)
+  from openai import OpenAI
+
+  # Create an OpenAI client pointing to SGLang server
+  client = OpenAI(
+      base_url="http://127.0.0.1:30000/v1",
+      api_key="EMPTY"  # SGLang doesn't require authentication by default
+  )
+
+  # Chat completion
+  response = client.chat.completions.create(
+      model="meta-llama/Llama-3.1-8B-Instruct",
+      messages=[
+          {"role": "system", "content": "You are a helpful assistant."},
+          {"role": "user", "content": "What is the capital of France?"}
+      ],
+      temperature=0.7,
+      max_tokens=256
+  )
+
+  print(response.choices[0].message.content)
+  ```
+
+  ```bash cURL
+  curl http://127.0.0.1:30000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model": "meta-llama/Llama-3.1-8B-Instruct",
+      "messages": [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the capital of France?"}
+      ],
+      "temperature": 0.7,
+      "max_tokens": 256
+    }'
+  ```
+
+  ```python Python (Streaming)
+  from openai import OpenAI
+
+  client = OpenAI(
+      base_url="http://127.0.0.1:30000/v1",
+      api_key="EMPTY"
+  )
+
+  # Streaming chat completion
+  stream = client.chat.completions.create(
+      model="meta-llama/Llama-3.1-8B-Instruct",
+      messages=[
+          {"role": "system", "content": "You are a helpful assistant."},
+          {"role": "user", "content": "Write a short poem about AI."}
+      ],
+      temperature=0.7,
+      max_tokens=256,
+      stream=True
+  )
+
+  for chunk in stream:
+      if chunk.choices[0].delta.content:
+          print(chunk.choices[0].delta.content, end="", flush=True)
+  ```
+</CodeGroup>
+
+**Expected Output:**
+```
+The capital of France is Paris. It is one of the most famous and beautiful cities in the world, known for its iconic landmarks like the Eiffel Tower, the Louvre Museum, and Notre-Dame Cathedral.
+```
+
+### Using Native SGLang API
+
+The native SGLang API provides a more Pythonic interface with advanced features.
+
+<CodeGroup>
+  ```python Offline Engine API
+  import sglang as sgl
+  from sglang.srt.server_args import ServerArgs
+  import dataclasses
+
+  # Create an offline engine
+  server_args = ServerArgs(
+      model_path="meta-llama/Llama-3.1-8B-Instruct"
+  )
+  llm = sgl.Engine(**dataclasses.asdict(server_args))
+
+  # Generate responses
+  prompts = [
+      "Hello, my name is",
+      "The president of the United States is",
+      "The capital of France is",
+      "The future of AI is",
+  ]
+
+  sampling_params = {"temperature": 0.8, "top_p": 0.95}
+  outputs = llm.generate(prompts, sampling_params)
+
+  # Print outputs
+  for prompt, output in zip(prompts, outputs):
+      print(f"Prompt: {prompt}")
+      print(f"Generated: {output['text']}")
+      print("=" * 50)
+  ```
+
+  ```python SGLang Runtime API
+  import sglang as sgl
+
+  @sgl.function
+  def multi_turn_question(s, question_1, question_2):
+      s += sgl.user(question_1)
+      s += sgl.assistant(sgl.gen("answer_1", max_tokens=256))
+      s += sgl.user(question_2)
+      s += sgl.assistant(sgl.gen("answer_2", max_tokens=256))
+
+  # Create a local runtime
+  runtime = sgl.Runtime(model_path="meta-llama/Llama-3.1-8B-Instruct")
+  sgl.set_default_backend(runtime)
+
+  # Run a single request
+  state = multi_turn_question.run(
+      question_1="What is the capital of the United States?",
+      question_2="List two local attractions.",
+  )
+
+  for m in state.messages():
+      print(f"{m['role']}: {m['content']}")
+
+  runtime.shutdown()
+  ```
+
+  ```python HTTP API Request
+  import requests
+
+  url = "http://127.0.0.1:30000/generate"
+  data = {
+      "text": "The capital of France is",
+      "sampling_params": {
+          "temperature": 0.7,
+          "max_new_tokens": 64
+      }
+  }
+
+  response = requests.post(url, json=data)
+  print(response.json())
+  ```
+</CodeGroup>
+
+**Expected Output:**
+```
+Prompt: Hello, my name is
+Generated: John, and I'm excited to share my story with you today. I grew up in a small town in the Midwest
+==================================================
+Prompt: The president of the United States is
+Generated: the head of state and head of government of the United States of America. The president directs the executive branch
+==================================================
+```
+
+## Complete Working Example
+
+Here's a full end-to-end example you can run:
+
+<Steps>
+  <Step title="Create a Python script">
+    Save this as `quickstart.py`:
+
+    ```python quickstart.py
+    from openai import OpenAI
+
+    # Initialize client
+    client = OpenAI(
+        base_url="http://127.0.0.1:30000/v1",
+        api_key="EMPTY"
+    )
+
+    # Example 1: Simple chat completion
+    print("=" * 50)
+    print("Example 1: Simple Chat")
+    print("=" * 50)
+    response = client.chat.completions.create(
+        model="meta-llama/Llama-3.1-8B-Instruct",
+        messages=[
+            {"role": "user", "content": "Explain quantum computing in one sentence."}
+        ],
+        max_tokens=100
+    )
+    print(response.choices[0].message.content)
+
+    # Example 2: Multi-turn conversation
+    print("\n" + "=" * 50)
+    print("Example 2: Multi-turn Conversation")
+    print("=" * 50)
+    messages = [
+        {"role": "system", "content": "You are a helpful math tutor."},
+        {"role": "user", "content": "What is 15 * 23?"}
+    ]
+    response = client.chat.completions.create(
+        model="meta-llama/Llama-3.1-8B-Instruct",
+        messages=messages,
+        max_tokens=50
+    )
+    assistant_reply = response.choices[0].message.content
+    print(f"Assistant: {assistant_reply}")
+
+    # Continue the conversation
+    messages.append({"role": "assistant", "content": assistant_reply})
+    messages.append({"role": "user", "content": "Now multiply that by 2."})
+    response = client.chat.completions.create(
+        model="meta-llama/Llama-3.1-8B-Instruct",
+        messages=messages,
+        max_tokens=50
+    )
+    print(f"Assistant: {response.choices[0].message.content}")
+
+    # Example 3: Streaming response
+    print("\n" + "=" * 50)
+    print("Example 3: Streaming")
+    print("=" * 50)
+    print("Assistant: ", end="")
+    stream = client.chat.completions.create(
+        model="meta-llama/Llama-3.1-8B-Instruct",
+        messages=[{"role": "user", "content": "Count from 1 to 5."}],
+        max_tokens=50,
+        stream=True
+    )
+    for chunk in stream:
+        if chunk.choices[0].delta.content:
+            print(chunk.choices[0].delta.content, end="", flush=True)
+    print("\n")
+
+    # Example 4: Batch requests
+    print("=" * 50)
+    print("Example 4: Batch Processing")
+    print("=" * 50)
+    questions = [
+        "What is the capital of Japan?",
+        "What is the capital of Germany?",
+        "What is the capital of Brazil?"
+    ]
+
+    for question in questions:
+        response = client.chat.completions.create(
+            model="meta-llama/Llama-3.1-8B-Instruct",
+            messages=[{"role": "user", "content": question}],
+            max_tokens=50,
+            temperature=0.0  # Deterministic output
+        )
+        print(f"Q: {question}")
+        print(f"A: {response.choices[0].message.content}")
+        print()
+    ```
+  </Step>
+
+  <Step title="Ensure the server is running">
+    ```bash
+    python -m sglang.launch_server \
+      --model-path meta-llama/Llama-3.1-8B-Instruct \
+      --host 127.0.0.1 \
+      --port 30000
+    ```
+  </Step>
+
+  <Step title="Run the example">
+    ```bash
+    python quickstart.py
+    ```
+  </Step>
+</Steps>
+
+## API Endpoints
+
+SGLang provides several API endpoints:
+
+| Endpoint | Description | OpenAI Compatible |
+|----------|-------------|-------------------|
+| `/v1/chat/completions` | Chat completions | ✅ |
+| `/v1/completions` | Text completions | ✅ |
+| `/v1/embeddings` | Generate embeddings | ✅ |
+| `/generate` | Native SGLang generation | ❌ |
+| `/get_model_info` | Get model metadata | ❌ |
+| `/health` | Health check | ❌ |
+
+## Sampling Parameters
+
+Control generation behavior with these common parameters:
+
+<Accordion title="Common Sampling Parameters">
+  | Parameter | Type | Default | Description |
+  |-----------|------|---------|-------------|
+  | `temperature` | float | 1.0 | Controls randomness (0.0 = deterministic, higher = more creative) |
+  | `top_p` | float | 1.0 | Nucleus sampling threshold |
+  | `max_tokens` | int | 128 | Maximum tokens to generate |
+  | `frequency_penalty` | float | 0.0 | Penalize token frequency (-2.0 to 2.0) |
+  | `presence_penalty` | float | 0.0 | Penalize new tokens (-2.0 to 2.0) |
+  | `stop` | str/list | None | Stop sequences |
+  | `n` | int | 1 | Number of completions to generate |
+  | `stream` | bool | false | Enable streaming responses |
+
+  See [Sampling Parameters](/basic-usage/sampling-params) for the complete list.
 </Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+## Common Use Cases
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
+<Accordion title="Text Completion">
+  ```python
+  response = client.completions.create(
+      model="meta-llama/Llama-3.1-8B-Instruct",
+      prompt="Once upon a time",
+      max_tokens=100,
+      temperature=0.8
+  )
+  print(response.choices[0].text)
+  ```
 </Accordion>
 
-## Next steps
+<Accordion title="JSON Mode / Structured Output">
+  ```python
+  response = client.chat.completions.create(
+      model="meta-llama/Llama-3.1-8B-Instruct",
+      messages=[
+          {"role": "user", "content": "List 3 colors in JSON format"}
+      ],
+      response_format={"type": "json_object"},
+      max_tokens=100
+  )
+  print(response.choices[0].message.content)
+  ```
+</Accordion>
 
-Now that you have your docs running, explore these key features:
+<Accordion title="Batch Inference">
+  ```python
+  import sglang as sgl
+  from sglang.srt.server_args import ServerArgs
+  import dataclasses
+
+  server_args = ServerArgs(model_path="meta-llama/Llama-3.1-8B-Instruct")
+  llm = sgl.Engine(**dataclasses.asdict(server_args))
+
+  prompts = [f"Question {i}: What is 2+{i}?" for i in range(10)]
+  outputs = llm.generate(prompts, {"temperature": 0.0})
+
+  for prompt, output in zip(prompts, outputs):
+      print(f"{prompt} -> {output['text']}")
+  ```
+</Accordion>
+
+## Troubleshooting
+
+<Accordion title="Server won't start">
+  **Out of memory error:**
+  ```bash
+  python -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.1-8B-Instruct \
+    --mem-fraction-static 0.7
+  ```
+
+  **CUDA errors:**
+  - Verify GPU availability: `nvidia-smi`
+  - Check CUDA version: `nvcc --version`
+  - Ensure PyTorch can see GPUs: `python -c "import torch; print(torch.cuda.is_available())"`
+</Accordion>
+
+<Accordion title="Slow inference">
+  - Use tensor parallelism for multi-GPU: `--tp 2`
+  - Enable FP8 quantization: `--quantization fp8`
+  - Reduce context length: `--context-length 4096`
+  - See [Hyperparameter Tuning](/advanced-features/hyperparameter-tuning) for optimization
+</Accordion>
+
+<Accordion title="Connection refused">
+  - Ensure server is running: check for "Uvicorn running" message
+  - Verify port is not in use: `lsof -i :30000`
+  - Check firewall settings
+  - Use correct host/port in client
+</Accordion>
+
+## Next Steps
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Server Arguments" icon="sliders" href="/advanced-features/server-arguments">
+    Learn about all available server configuration options
+  </Card>
+  <Card title="Sampling Parameters" icon="dice" href="/basic-usage/sampling-params">
+    Control generation behavior with sampling parameters
+  </Card>
+  <Card title="Model Support" icon="cube" href="/supported-models">
+    Browse supported models and architectures
+  </Card>
+  <Card title="Production Deployment" icon="server" href="/advanced-features/observability">
+    Deploy SGLang in production with monitoring
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

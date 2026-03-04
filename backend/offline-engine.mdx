@@ -1,0 +1,456 @@
+---
+title: Offline Engine
+description: Use SGLang's lightweight offline engine for batch inference
+---
+
+## Overview
+
+The offline engine provides a lightweight inference interface without the HTTP server and inter-process communication overhead. It's ideal for:
+
+- Batch processing
+- Benchmarking
+- Integration into larger applications
+- Jupyter notebooks and scripts
+
+## Basic Usage
+
+```python
+from sglang import Engine
+
+engine = Engine(model_path="meta-llama/Llama-3.1-8B-Instruct")
+
+prompts = [
+    "What is the capital of France?",
+    "Explain quantum computing",
+    "Write a haiku about coding"
+]
+
+outputs = engine.generate(
+    prompt=prompts,
+    sampling_params={"temperature": 0.8, "max_new_tokens": 128}
+)
+
+for i, text in enumerate(outputs["text"]):
+    print(f"\n=== Output {i} ===")
+    print(text)
+```
+
+## Key Differences from Server Mode
+
+<Note>
+The offline engine runs entirely in-process with no HTTP server or separate scheduler processes.
+</Note>
+
+| Feature | Offline Engine | Server Mode |
+|---------|----------------|-------------|
+| HTTP API | No | Yes |
+| Multi-process | No | Yes |
+| Streaming | Yes (synchronous) | Yes (async) |
+| OpenAI compatibility | No | Yes |
+| Memory overhead | Lower | Higher |
+| Use case | Batch processing | Production serving |
+
+## Configuration
+
+### Minimal Setup
+
+```python
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    log_level="error"  # Suppress logs for cleaner output
+)
+```
+
+### Production Setup
+
+```python
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-70B-Instruct",
+    tp_size=4,
+    mem_fraction_static=0.85,
+    trust_remote_code=True,
+    dtype="bfloat16"
+)
+```
+
+## Batch Inference
+
+### Same Parameters
+
+All prompts use the same sampling parameters:
+
+```python
+prompts = [f"Question {i}: What is {i} + {i}?" for i in range(10)]
+
+outputs = engine.generate(
+    prompt=prompts,
+    sampling_params={"temperature": 0.0, "max_new_tokens": 50}
+)
+
+for prompt, text in zip(prompts, outputs["text"]):
+    print(f"{prompt} -> {text}")
+```
+
+### Different Parameters
+
+Each prompt can have its own parameters:
+
+```python
+prompts = [
+    "Write a creative story",
+    "Solve this math problem: 123 + 456",
+    "Translate to French: Hello world"
+]
+
+sampling_params = [
+    {"temperature": 0.9, "max_new_tokens": 200},  # Creative
+    {"temperature": 0.0, "max_new_tokens": 50},   # Factual
+    {"temperature": 0.3, "max_new_tokens": 30}    # Translation
+]
+
+outputs = engine.generate(
+    prompt=prompts,
+    sampling_params=sampling_params
+)
+```
+
+## Token-Based Input
+
+For maximum control, pass pre-tokenized inputs:
+
+```python
+# Get tokenizer
+tokenizer = engine.tokenizer_manager.tokenizer
+
+# Tokenize prompts
+prompts = ["Hello", "How are you?"]
+input_ids = [tokenizer.encode(p) for p in prompts]
+
+# Generate
+outputs = engine.generate(
+    input_ids=input_ids,
+    sampling_params={"max_new_tokens": 50}
+)
+```
+
+## Streaming
+
+```python
+for chunk in engine.generate(
+    prompt="Tell me a long story about a dragon",
+    sampling_params={"temperature": 0.8, "max_new_tokens": 512},
+    stream=True
+):
+    print(chunk["text"], end="", flush=True)
+print()
+```
+
+## Output Information
+
+The engine returns rich metadata:
+
+```python
+outputs = engine.generate(
+    prompt="What is machine learning?",
+    sampling_params={"max_new_tokens": 100}
+)
+
+print("Generated text:", outputs["text"])
+print("\nMetadata:")
+print(f"Prompt tokens: {outputs['meta_info']['prompt_tokens']}")
+print(f"Completion tokens: {outputs['meta_info']['completion_tokens']}")
+print(f"Finish reason: {outputs['meta_info']['finish_reason']}")
+
+if outputs['meta_info'].get('cached_tokens'):
+    print(f"Cached tokens: {outputs['meta_info']['cached_tokens']}")
+```
+
+## Embeddings
+
+```python
+from sglang import Engine
+
+engine = Engine(
+    model_path="BAAI/bge-large-en-v1.5",
+    is_embedding=True
+)
+
+texts = [
+    "Machine learning is a subset of AI",
+    "Deep learning uses neural networks",
+    "Natural language processing handles text"
+]
+
+outputs = engine.encode(prompt=texts)
+
+for i, embedding in enumerate(outputs["embedding"]):
+    print(f"Text {i}: {len(embedding)} dimensions")
+    print(f"First 5 values: {embedding[:5]}")
+```
+
+## Structured Output
+
+### JSON Mode
+
+```python
+import json
+
+schema = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "author": {"type": "string"},
+        "year": {"type": "integer"},
+        "genre": {"type": "string", "enum": ["fiction", "non-fiction", "poetry"]}
+    },
+    "required": ["title", "author"]
+}
+
+outputs = engine.generate(
+    prompt="Generate information about a famous book",
+    sampling_params={
+        "max_new_tokens": 200,
+        "json_schema": json.dumps(schema)
+    }
+)
+
+book_data = json.loads(outputs["text"])
+print(f"Title: {book_data['title']}")
+print(f"Author: {book_data['author']}")
+```
+
+### Regex Mode
+
+```python
+# Generate phone numbers
+outputs = engine.generate(
+    prompt=[f"Generate phone number {i}" for i in range(5)],
+    sampling_params={
+        "max_new_tokens": 20,
+        "regex": r"\(\d{3}\) \d{3}-\d{4}"
+    }
+)
+
+for phone in outputs["text"]:
+    print(phone)  # e.g., "(555) 123-4567"
+```
+
+## Multimodal Models
+
+### Single Image
+
+```python
+engine = Engine(model_path="liuhaotian/llava-v1.5-7b")
+
+outputs = engine.generate(
+    prompt="Describe this image in detail",
+    image_data="path/to/image.jpg",
+    sampling_params={"max_new_tokens": 200}
+)
+
+print(outputs["text"])
+```
+
+### Batch with Images
+
+```python
+images = ["image1.jpg", "image2.jpg", "image3.jpg"]
+prompts = ["What's in this image?"] * len(images)
+
+outputs = engine.generate(
+    prompt=prompts,
+    image_data=images,
+    sampling_params={"max_new_tokens": 150}
+)
+
+for img, desc in zip(images, outputs["text"]):
+    print(f"{img}: {desc}")
+```
+
+## Performance Tuning
+
+### Memory Optimization
+
+```python
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-70B-Instruct",
+    tp_size=4,
+    mem_fraction_static=0.9,  # Use 90% of GPU memory
+    chunked_prefill_size=8192,  # Larger chunks for better throughput
+    max_total_tokens=16384  # Limit total KV cache size
+)
+```
+
+### Throughput Optimization
+
+```python
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    cuda_graph_max_bs=256,  # Larger batch sizes
+    disable_radix_cache=False,  # Keep prefix caching enabled
+    chunked_prefill_size=4096
+)
+
+# Process large batches
+batch_size = 128
+prompts = [f"Prompt {i}" for i in range(1000)]
+
+for i in range(0, len(prompts), batch_size):
+    batch = prompts[i:i + batch_size]
+    outputs = engine.generate(
+        prompt=batch,
+        sampling_params={"max_new_tokens": 100}
+    )
+    # Process outputs
+```
+
+### Quantization
+
+```python
+# FP8 quantization for memory efficiency
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-70B-Instruct",
+    tp_size=4,
+    quantization="fp8",
+    kv_cache_dtype="fp8_e4m3"
+)
+
+# AWQ 4-bit quantization
+engine = Engine(
+    model_path="TheBloke/Llama-2-13B-AWQ",
+    quantization="awq",
+    dtype="half"
+)
+```
+
+## Advanced Features
+
+### Logprobs
+
+```python
+outputs = engine.generate(
+    prompt="The capital of France is",
+    sampling_params={"max_new_tokens": 5},
+    return_logprob=True,
+    top_logprobs_num=3
+)
+
+for i, logprob in enumerate(outputs["meta_info"]["output_token_logprobs"]):
+    print(f"Token {i} logprob: {logprob}")
+
+for i, top_lps in enumerate(outputs["meta_info"]["output_top_logprobs"]):
+    print(f"Token {i} top 3: {top_lps}")
+```
+
+### Custom Stop Sequences
+
+```python
+outputs = engine.generate(
+    prompt="List three animals:\n1.",
+    sampling_params={
+        "max_new_tokens": 100,
+        "stop": ["\n4.", "\n\n"],  # Stop at 4th item or double newline
+        "temperature": 0.7
+    }
+)
+
+print(outputs["text"])
+print(f"Stopped at: {outputs['meta_info']['finish_reason']['matched']}")
+```
+
+### LoRA Adapters
+
+```python
+# Load base model with LoRA support
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B",
+    enable_lora=True,
+    lora_paths=["./adapters/math", "./adapters/code"]
+)
+
+# Use specific adapter
+outputs = engine.generate(
+    prompt="Solve: 2x + 5 = 13",
+    lora_path="math",
+    sampling_params={"max_new_tokens": 100}
+)
+
+print(outputs["text"])
+```
+
+## Benchmarking
+
+```python
+import time
+
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    log_level="error"
+)
+
+# Warmup
+for _ in range(10):
+    engine.generate(prompt="warmup", sampling_params={"max_new_tokens": 10})
+
+# Benchmark
+num_prompts = 100
+prompts = [f"Question {i}" for i in range(num_prompts)]
+
+start = time.time()
+outputs = engine.generate(
+    prompt=prompts,
+    sampling_params={"max_new_tokens": 50}
+)
+end = time.time()
+
+total_tokens = sum(outputs["meta_info"]["completion_tokens"])
+throughput = total_tokens / (end - start)
+
+print(f"Processed {num_prompts} prompts in {end - start:.2f}s")
+print(f"Throughput: {throughput:.2f} tokens/s")
+```
+
+## Memory Management
+
+### Flush Cache
+
+```python
+# Clear KV cache between different tasks
+engine.flush_cache()
+```
+
+### Context Manager
+
+```python
+# Automatically clean up resources
+with Engine(model_path="meta-llama/Llama-3.1-8B-Instruct") as engine:
+    outputs = engine.generate(
+        prompt="Hello",
+        sampling_params={"max_new_tokens": 50}
+    )
+    print(outputs["text"])
+# Engine automatically shut down here
+```
+
+## Error Handling
+
+```python
+try:
+    outputs = engine.generate(
+        prompt="test",
+        sampling_params={
+            "temperature": 3.0,  # Invalid: too high
+            "max_new_tokens": -1  # Invalid: negative
+        }
+    )
+except ValueError as e:
+    print(f"Invalid parameters: {e}")
+except RuntimeError as e:
+    print(f"Runtime error: {e}")
+```
+
+## See Also
+
+- [Native API](/backend/native-api) - Full engine API with server features
+- [Sampling Parameters](/backend/sampling-parameters) - Generation control
+- [Server Arguments](/backend/server-arguments) - Configuration options

@@ -1,0 +1,424 @@
+---
+title: Runtime
+description: HTTP server wrapper for SGLang
+---
+
+# Runtime
+
+The `Runtime` class is a wrapper for launching the SGLang HTTP server programmatically from Python. It's primarily used with the SGLang frontend language.
+
+<Note>
+For offline processing without the frontend language, use the [Engine](/api/engine) class instead.
+</Note>
+
+## RuntimeEndpoint
+
+The `RuntimeEndpoint` class provides a client interface to communicate with a running SGLang server.
+
+### Initialization
+
+```python
+from sglang.lang.backend.runtime_endpoint import RuntimeEndpoint
+
+endpoint = RuntimeEndpoint(
+    base_url="http://localhost:30000",
+    api_key="your-api-key"
+)
+```
+
+<ParamField path="base_url" type="str" required>
+  Base URL of the SGLang server.
+</ParamField>
+
+<ParamField path="api_key" type="Optional[str]" default="None">
+  API key for authentication.
+</ParamField>
+
+<ParamField path="verify" type="Optional[str]" default="None">
+  SSL certificate verification path.
+</ParamField>
+
+<ParamField path="chat_template_name" type="Optional[str]" default="None">
+  Name of the chat template to use. Auto-detected from model if not specified.
+</ParamField>
+
+### Methods
+
+#### get_model_name
+
+Get the model path/name from the server.
+
+```python
+model_name = endpoint.get_model_name()
+print(model_name)  # "meta-llama/Llama-3.1-8B-Instruct"
+```
+
+#### get_server_info
+
+Get server configuration and status information.
+
+```python
+info = endpoint.get_server_info()
+print(info["model_path"])
+print(info["tp_size"])
+```
+
+#### flush_cache
+
+Flush the KV cache on the server.
+
+```python
+endpoint.flush_cache()
+```
+
+#### cache_prefix
+
+Pre-cache a prefix string in the KV cache.
+
+```python
+endpoint.cache_prefix("System: You are a helpful assistant.")
+```
+
+#### start_profile / stop_profile
+
+Start and stop server profiling.
+
+```python
+endpoint.start_profile()
+# Run your workload
+endpoint.stop_profile()
+```
+
+## Runtime
+
+The `Runtime` class launches an HTTP server in a separate process and provides an endpoint to interact with it.
+
+### Initialization
+
+```python
+from sglang.lang.backend.runtime_endpoint import Runtime
+
+runtime = Runtime(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=1,
+    log_level="info"
+)
+```
+
+<ParamField path="model_path" type="str" required>
+  Path to the model on Hugging Face or local filesystem. See [ServerArgs](/api/server-args) for more details.
+</ParamField>
+
+<ParamField path="log_level" type="str" default="error">
+  Log level for the server. Options: "debug", "info", "warning", "error".
+</ParamField>
+
+<ParamField path="launch_timeout" type="float" default="300.0">
+  Timeout in seconds for waiting for the server to start.
+</ParamField>
+
+<ParamField path="**kwargs">
+  Additional keyword arguments are passed to [ServerArgs](/api/server-args).
+</ParamField>
+
+### Attributes
+
+<ParamField path="url" type="str">
+  Base URL of the launched server (e.g., "http://127.0.0.1:30000").
+</ParamField>
+
+<ParamField path="generate_url" type="str">
+  Full URL for the generate endpoint.
+</ParamField>
+
+<ParamField path="endpoint" type="RuntimeEndpoint">
+  RuntimeEndpoint instance for interacting with the server.
+</ParamField>
+
+### Methods
+
+#### generate
+
+Synchronous text generation.
+
+```python
+response_json = runtime.generate(
+    prompt="What is machine learning?",
+    sampling_params={"temperature": 0.7, "max_new_tokens": 100}
+)
+
+import json
+response = json.loads(response_json)
+print(response["text"])
+```
+
+<ParamField path="prompt" type="Union[str, List[str]]" required>
+  Input prompt(s).
+</ParamField>
+
+<ParamField path="sampling_params" type="Optional[Dict]">
+  Sampling parameters dictionary.
+</ParamField>
+
+<ParamField path="return_logprob" type="Optional[Union[List[bool], bool]]" default="False">
+  Whether to return log probabilities.
+</ParamField>
+
+<ParamField path="lora_path" type="Optional[List[Optional[str]]]">
+  LoRA adapter path(s) for each request.
+</ParamField>
+
+**Returns:** `str` - JSON string containing the response
+
+#### async_generate
+
+Asynchronous streaming text generation.
+
+```python
+import asyncio
+
+async def stream_text():
+    async for chunk in runtime.async_generate(
+        prompt="Tell me a story",
+        sampling_params={"temperature": 0.8, "max_new_tokens": 256}
+    ):
+        print(chunk, end="", flush=True)
+
+asyncio.run(stream_text())
+```
+
+<Note>
+Alias: `add_request` can also be used for `async_generate`.
+</Note>
+
+#### encode
+
+Generate embeddings.
+
+```python
+embeddings_json = runtime.encode(
+    prompt="Hello, world!"
+)
+
+import json
+embeddings = json.loads(embeddings_json)
+print(embeddings["embedding"])
+```
+
+<ParamField path="prompt" type="Union[str, List[str], List[Dict], List[List[Dict]]]" required>
+  Text to encode.
+</ParamField>
+
+**Returns:** `str` - JSON string containing embeddings
+
+#### get_server_info
+
+Get server information asynchronously.
+
+```python
+import asyncio
+
+async def get_info():
+    info = await runtime.get_server_info()
+    print(info["model_path"])
+
+asyncio.run(get_info())
+```
+
+**Returns:** `Dict` - Server information dictionary
+
+#### get_tokenizer
+
+Get the tokenizer used by the server.
+
+```python
+tokenizer = runtime.get_tokenizer()
+tokens = tokenizer.encode("Hello, world!")
+```
+
+**Returns:** Hugging Face tokenizer instance
+
+#### start_profile / stop_profile
+
+Start and stop server profiling.
+
+```python
+runtime.start_profile()
+# Run your workload
+runtime.stop_profile()
+```
+
+#### cache_prefix
+
+Pre-cache a prefix string.
+
+```python
+runtime.cache_prefix("System: You are a helpful assistant.")
+```
+
+#### shutdown
+
+Shutdown the server and clean up resources.
+
+```python
+runtime.shutdown()
+```
+
+<Note>
+The shutdown method is automatically called when the Runtime object is deleted or when the Python program terminates.
+</Note>
+
+## Usage Examples
+
+### Basic Server Launch
+
+```python
+from sglang.lang.backend.runtime_endpoint import Runtime
+import json
+
+# Launch the server
+runtime = Runtime(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=1,
+    log_level="info"
+)
+
+# Generate text
+response_json = runtime.generate(
+    prompt="What is the capital of France?",
+    sampling_params={"temperature": 0.0, "max_new_tokens": 32}
+)
+
+response = json.loads(response_json)
+print(response["text"])
+
+# Shutdown
+runtime.shutdown()
+```
+
+### Streaming with Async
+
+```python
+import asyncio
+from sglang.lang.backend.runtime_endpoint import Runtime
+
+async def main():
+    runtime = Runtime(
+        model_path="meta-llama/Llama-3.1-8B-Instruct",
+        tp_size=1
+    )
+    
+    # Stream the response
+    async for chunk in runtime.async_generate(
+        prompt="Write a poem about AI",
+        sampling_params={"temperature": 0.8, "max_new_tokens": 200}
+    ):
+        print(chunk, end="", flush=True)
+    
+    runtime.shutdown()
+
+asyncio.run(main())
+```
+
+### Using RuntimeEndpoint with Existing Server
+
+```python
+from sglang.lang.backend.runtime_endpoint import RuntimeEndpoint
+
+# Connect to an existing server
+endpoint = RuntimeEndpoint(
+    base_url="http://localhost:30000",
+    api_key="my-secret-key"
+)
+
+# Get model info
+model_name = endpoint.get_model_name()
+print(f"Connected to: {model_name}")
+
+# Get server info
+info = endpoint.get_server_info()
+print(f"TP Size: {info['tp_size']}")
+print(f"Max Total Tokens: {info['max_total_tokens']}")
+
+# Cache a common prefix
+endpoint.cache_prefix("You are a helpful AI assistant.")
+```
+
+### Batch Requests
+
+```python
+import json
+
+runtime = Runtime(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=1
+)
+
+prompts = [
+    "What is AI?",
+    "Explain machine learning",
+    "What is deep learning?"
+]
+
+response_json = runtime.generate(
+    prompt=prompts,
+    sampling_params={"temperature": 0.7, "max_new_tokens": 100}
+)
+
+responses = json.loads(response_json)
+for i, response in enumerate(responses):
+    print(f"Response {i+1}: {response['text']}")
+
+runtime.shutdown()
+```
+
+### Using with Frontend Language (SGLang)
+
+```python
+import sglang as sgl
+from sglang.lang.backend.runtime_endpoint import Runtime
+
+# Launch runtime
+runtime = Runtime(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=1
+)
+
+# Set backend
+sgl.set_default_backend(runtime.endpoint)
+
+# Use SGLang frontend
+@sgl.function
+def chatbot(s, user_message):
+    s += sgl.system("You are a helpful assistant.")
+    s += sgl.user(user_message)
+    s += sgl.assistant(sgl.gen("response", max_tokens=100))
+
+state = chatbot.run(user_message="What is machine learning?")
+print(state["response"])
+
+runtime.shutdown()
+```
+
+## Differences from Engine
+
+| Feature | Runtime | Engine |
+|---------|---------|--------|
+| Use case | Frontend language (SGLang) | Direct Python API |
+| Server | Launches HTTP server | In-process |
+| API | HTTP-based | Direct function calls |
+| Overhead | Higher (HTTP serialization) | Lower (in-process) |
+| Multi-client | Yes (via HTTP) | No (single process) |
+
+<Tip>
+Use **Engine** for offline batch processing and **Runtime** when you need:
+- An HTTP server for multiple clients
+- Integration with the SGLang frontend language
+- Remote access to the model
+</Tip>
+
+## See Also
+
+- [Engine](/api/engine) - Direct Python API for inference
+- [ServerArgs](/api/server-args) - Server configuration options
+- [SamplingParams](/api/sampling-params) - Sampling parameter configuration

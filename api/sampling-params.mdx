@@ -1,0 +1,485 @@
+---
+title: SamplingParams
+description: Sampling parameters for text generation
+---
+
+# SamplingParams
+
+The `SamplingParams` class controls the sampling behavior during text generation, including temperature, top-k/top-p sampling, penalties, and structured output constraints.
+
+## Usage
+
+```python
+from sglang import Engine
+from sglang.srt.sampling.sampling_params import SamplingParams
+
+engine = Engine(model_path="meta-llama/Llama-3.1-8B-Instruct")
+
+# Option 1: Pass dict to engine.generate()
+response = engine.generate(
+    prompt="Once upon a time",
+    sampling_params={"temperature": 0.8, "max_new_tokens": 128}
+)
+
+# Option 2: Create SamplingParams object
+sampling_params = SamplingParams(
+    temperature=0.8,
+    max_new_tokens=128,
+    top_p=0.9
+)
+response = engine.generate(
+    prompt="Once upon a time",
+    sampling_params=sampling_params.__dict__
+)
+```
+
+## Parameters
+
+### Generation Length
+
+<ParamField path="max_new_tokens" type="int" default="128">
+  Maximum number of tokens to generate.
+  
+  ```python
+  max_new_tokens=256  # Generate up to 256 tokens
+  ```
+</ParamField>
+
+<ParamField path="min_new_tokens" type="int" default="0">
+  Minimum number of tokens to generate before stopping.
+  
+  Useful to prevent early termination.
+</ParamField>
+
+### Temperature and Sampling
+
+<ParamField path="temperature" type="float" default="1.0">
+  Sampling temperature. Controls randomness in generation.
+  
+  - `0.0`: Greedy decoding (deterministic)
+  - `< 1.0`: Less random (more focused)
+  - `= 1.0`: Neutral
+  - `> 1.0`: More random (more creative)
+  
+  ```python
+  temperature=0.0   # Deterministic output
+  temperature=0.7   # Balanced creativity
+  temperature=1.5   # Very creative/random
+  ```
+</ParamField>
+
+<ParamField path="top_p" type="float" default="1.0">
+  Nucleus sampling probability threshold.
+  
+  Only tokens with cumulative probability >= top_p are considered.
+  
+  ```python
+  top_p=0.9   # Consider tokens covering 90% probability mass
+  top_p=0.95  # More diverse output
+  ```
+</ParamField>
+
+<ParamField path="top_k" type="int" default="-1">
+  Top-k sampling: only consider the k most likely tokens.
+  
+  - `-1`: Disabled (consider all tokens)
+  - `> 0`: Only consider top k tokens
+  
+  ```python
+  top_k=50   # Only sample from top 50 tokens
+  top_k=-1   # Disabled
+  ```
+</ParamField>
+
+<ParamField path="min_p" type="float" default="0.0">
+  Minimum probability threshold for token selection.
+  
+  Tokens with probability < min_p are filtered out.
+</ParamField>
+
+### Penalties
+
+<ParamField path="frequency_penalty" type="float" default="0.0">
+  Penalty for tokens based on their frequency in the generated text.
+  
+  Range: `[-2.0, 2.0]`
+  - Positive values: Reduce repetition
+  - Negative values: Encourage repetition
+  
+  ```python
+  frequency_penalty=0.5   # Reduce repetition
+  frequency_penalty=1.0   # Strongly reduce repetition
+  ```
+</ParamField>
+
+<ParamField path="presence_penalty" type="float" default="0.0">
+  Penalty for tokens that have already appeared in the generated text.
+  
+  Range: `[-2.0, 2.0]`
+  - Positive values: Encourage diversity
+  - Negative values: Encourage using the same tokens
+  
+  ```python
+  presence_penalty=0.6   # Encourage diverse vocabulary
+  ```
+</ParamField>
+
+<ParamField path="repetition_penalty" type="float" default="1.0">
+  Penalty for repeating tokens from the prompt or previous output.
+  
+  Range: `[0.0, 2.0]`
+  - `1.0`: No penalty
+  - `> 1.0`: Discourage repetition
+  - `< 1.0`: Encourage repetition
+  
+  ```python
+  repetition_penalty=1.1   # Slightly discourage repetition
+  repetition_penalty=1.5   # Strongly discourage repetition
+  ```
+</ParamField>
+
+### Stop Conditions
+
+<ParamField path="stop" type="Optional[Union[str, List[str]]]" default="None">
+  String(s) that will stop generation when encountered.
+  
+  ```python
+  stop="\n\n"                    # Stop at double newline
+  stop=["\n\n", "END", "STOP"]  # Stop at any of these strings
+  ```
+</ParamField>
+
+<ParamField path="stop_token_ids" type="Optional[List[int]]" default="None">
+  Token IDs that will stop generation when encountered.
+  
+  ```python
+  stop_token_ids=[2, 32000]  # Stop at these token IDs
+  ```
+</ParamField>
+
+<ParamField path="stop_regex" type="Optional[Union[str, List[str]]]" default="None">
+  Regular expression(s) that will stop generation when matched.
+  
+  ```python
+  stop_regex=r"\d{4}-\d{2}-\d{2}"  # Stop at date pattern
+  ```
+</ParamField>
+
+<ParamField path="ignore_eos" type="bool" default="False">
+  Ignore the end-of-sequence token and continue generating.
+  
+  Useful when you want to generate exactly `max_new_tokens` tokens.
+</ParamField>
+
+### Structured Output
+
+<ParamField path="json_schema" type="Optional[str]" default="None">
+  JSON schema for structured output generation.
+  
+  ```python
+  json_schema='''{
+    "type": "object",
+    "properties": {
+      "name": {"type": "string"},
+      "age": {"type": "integer"}
+    },
+    "required": ["name", "age"]
+  }'''
+  ```
+</ParamField>
+
+<ParamField path="regex" type="Optional[str]" default="None">
+  Regular expression constraint for output generation.
+  
+  ```python
+  regex=r"\d{3}-\d{2}-\d{4}"  # Generate SSN format
+  regex=r"[A-Z][a-z]+"        # Generate capitalized word
+  ```
+</ParamField>
+
+<ParamField path="ebnf" type="Optional[str]" default="None">
+  EBNF grammar constraint for output generation.
+  
+  ```python
+  ebnf='''
+  root ::= sentence+
+  sentence ::= word+ "." "\n"
+  word ::= [a-zA-Z]+
+  '''
+  ```
+</ParamField>
+
+<Note>
+Only one of `json_schema`, `regex`, or `ebnf` can be set at a time.
+</Note>
+
+### Output Control
+
+<ParamField path="skip_special_tokens" type="bool" default="True">
+  Skip special tokens in the output text.
+</ParamField>
+
+<ParamField path="spaces_between_special_tokens" type="bool" default="True">
+  Add spaces between special tokens in the output.
+</ParamField>
+
+<ParamField path="no_stop_trim" type="bool" default="False">
+  Don't trim the stop string from the output.
+  
+  By default, stop strings are removed from output. Set to `True` to keep them.
+</ParamField>
+
+### Advanced Options
+
+<ParamField path="n" type="int" default="1">
+  Number of completions to generate for each prompt.
+  
+  ```python
+  n=3  # Generate 3 different completions
+  ```
+</ParamField>
+
+<ParamField path="logit_bias" type="Optional[Dict[str, float]]" default="None">
+  Bias to add to logits of specific tokens.
+  
+  Keys are token IDs (as strings), values are bias values.
+  
+  ```python
+  logit_bias={
+    "1024": 5.0,   # Strongly encourage token 1024
+    "2048": -10.0  # Strongly discourage token 2048
+  }
+  ```
+</ParamField>
+
+<ParamField path="sampling_seed" type="Optional[int]" default="None">
+  Random seed for sampling. Enables reproducible generation.
+  
+  ```python
+  sampling_seed=42  # Reproducible output
+  ```
+</ParamField>
+
+<ParamField path="stream_interval" type="Optional[int]" default="None">
+  Token interval for streaming. Return output every N tokens.
+  
+  ```python
+  stream_interval=5  # Stream every 5 tokens
+  ```
+</ParamField>
+
+<ParamField path="custom_params" type="Optional[Dict[str, Any]]" default="None">
+  Custom parameters for specialized use cases.
+</ParamField>
+
+## Common Patterns
+
+### Greedy Decoding (Deterministic)
+
+```python
+sampling_params = {
+    "temperature": 0.0,
+    "max_new_tokens": 100
+}
+```
+
+### Balanced Generation
+
+```python
+sampling_params = {
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "max_new_tokens": 256,
+    "frequency_penalty": 0.5
+}
+```
+
+### Creative Writing
+
+```python
+sampling_params = {
+    "temperature": 1.2,
+    "top_p": 0.95,
+    "max_new_tokens": 512,
+    "repetition_penalty": 1.1
+}
+```
+
+### Structured JSON Output
+
+```python
+sampling_params = {
+    "max_new_tokens": 256,
+    "json_schema": '''{
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "age": {"type": "integer"},
+            "city": {"type": "string"}
+        },
+        "required": ["name", "age"]
+    }'''
+}
+```
+
+### Format Constraint (Phone Number)
+
+```python
+sampling_params = {
+    "max_new_tokens": 20,
+    "regex": r"\(\d{3}\) \d{3}-\d{4}"
+}
+```
+
+### Code Generation
+
+```python
+sampling_params = {
+    "temperature": 0.2,
+    "top_p": 0.95,
+    "max_new_tokens": 512,
+    "stop": ["\n\n", "```"],
+    "repetition_penalty": 1.05
+}
+```
+
+### Reproducible Output
+
+```python
+sampling_params = {
+    "temperature": 0.8,
+    "max_new_tokens": 256,
+    "sampling_seed": 42  # Same seed = same output
+}
+```
+
+## Usage Examples
+
+### Basic Usage
+
+```python
+from sglang import Engine
+
+engine = Engine(model_path="meta-llama/Llama-3.1-8B-Instruct")
+
+response = engine.generate(
+    prompt="Explain quantum computing in simple terms",
+    sampling_params={
+        "temperature": 0.7,
+        "max_new_tokens": 200,
+        "top_p": 0.9
+    }
+)
+
+print(response["text"])
+```
+
+### Multiple Completions
+
+```python
+response = engine.generate(
+    prompt="Write a tagline for a coffee shop",
+    sampling_params={
+        "temperature": 1.0,
+        "max_new_tokens": 30,
+        "n": 5  # Generate 5 different taglines
+    }
+)
+
+for i, completion in enumerate(response):
+    print(f"Tagline {i+1}: {completion['text']}")
+```
+
+### Controlled Repetition
+
+```python
+response = engine.generate(
+    prompt="Generate a list of programming languages:",
+    sampling_params={
+        "temperature": 0.8,
+        "max_new_tokens": 100,
+        "frequency_penalty": 1.0,
+        "presence_penalty": 0.5,
+        "stop": "\n\n"
+    }
+)
+```
+
+### JSON Output
+
+```python
+response = engine.generate(
+    prompt="Extract information from: John Doe is 30 years old and lives in NYC",
+    sampling_params={
+        "max_new_tokens": 150,
+        "json_schema": '''{
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "age": {"type": "integer"},
+                "city": {"type": "string"}
+            }
+        }'''
+    }
+)
+
+import json
+result = json.loads(response["text"])
+print(result)  # {"name": "John Doe", "age": 30, "city": "NYC"}
+```
+
+### Regex Constraint
+
+```python
+# Generate a date in YYYY-MM-DD format
+response = engine.generate(
+    prompt="Today's date is:",
+    sampling_params={
+        "max_new_tokens": 20,
+        "regex": r"\d{4}-\d{2}-\d{2}"
+    }
+)
+
+print(response["text"])  # e.g., "2024-03-15"
+```
+
+## Validation
+
+The `SamplingParams` class includes validation to ensure parameters are within valid ranges:
+
+- `temperature >= 0.0`
+- `0.0 < top_p <= 1.0`
+- `0.0 <= min_p <= 1.0`
+- `top_k >= 1` or `-1` (disabled)
+- `-2.0 <= frequency_penalty <= 2.0`
+- `-2.0 <= presence_penalty <= 2.0`
+- `0.0 <= repetition_penalty <= 2.0`
+- `0 <= min_new_tokens <= max_new_tokens`
+
+## Best Practices
+
+<Tip>
+**For deterministic output**: Use `temperature=0.0` or set `sampling_seed` to a fixed value.
+</Tip>
+
+<Tip>
+**For creative tasks**: Use higher temperature (0.8-1.2) with `top_p=0.9-0.95`.
+</Tip>
+
+<Tip>
+**For structured output**: Use `json_schema` or `regex` constraints to ensure valid format.
+</Tip>
+
+<Tip>
+**To reduce repetition**: Combine `frequency_penalty`, `presence_penalty`, and `repetition_penalty`.
+</Tip>
+
+<Warning>
+Setting temperature to 0 is converted internally to `temperature=1.0` with `top_k=1` for greedy sampling.
+</Warning>
+
+## See Also
+
+- [Engine](/api/engine) - Main inference API
+- [Runtime](/api/runtime) - HTTP server wrapper
+- [ServerArgs](/api/server-args) - Server configuration

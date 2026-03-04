@@ -1,0 +1,570 @@
+---
+title: Continuous Batching
+description: How SGLang dynamically manages request batches for optimal throughput
+---
+
+Continuous batching is a core scheduling technique in SGLang that allows requests to dynamically enter and exit batches without waiting for the entire batch to complete. This dramatically improves GPU utilization and reduces latency compared to traditional static batching.
+
+## The Problem with Static Batching
+
+Traditional inference systems use static batching:
+
+```python
+# Static batching - ALL requests must complete together
+batch = [req1, req2, req3, req4]  # All start
+while not all_finished(batch):
+    batch = forward(batch)  # Process batch
+# All requests finish, then new batch can start
+```
+
+**Problems**:
+- **Head-of-line blocking**: Fast requests wait for slow ones
+- **GPU underutilization**: Batch shrinks as requests finish
+- **Increased latency**: Requests queue while waiting for batch slots
+
+## Continuous Batching Solution
+
+SGLang implements continuous batching:
+
+```python
+# Continuous batching - requests join/leave dynamically
+running_batch = [req1, req2, req3, req4]
+while True:
+    # Remove finished requests
+    running_batch = [r for r in running_batch if not r.finished()]
+    
+    # Add new requests if space available
+    if has_available_memory():
+        new_reqs = get_new_requests()
+        running_batch.extend(new_reqs)
+    
+    # Forward with current batch
+    if running_batch:
+        running_batch = forward(running_batch)
+```
+
+**Benefits**:
+- **No head-of-line blocking**: Requests finish independently
+- **Higher GPU utilization**: Batch stays fuller longer
+- **Lower latency**: New requests start immediately
+
+<Info>
+Continuous batching is sometimes called "iteration-level scheduling" or "dynamic batching".
+</Info>
+
+## Implementation in SGLang
+
+### Scheduler Event Loop
+
+The scheduler runs a continuous loop in `python/sglang/srt/managers/scheduler.py`:
+
+```python
+@DynamicGradMode()
+def event_loop_normal(self):
+    """A normal scheduler loop."""
+    while True:
+        # 1. Receive new requests
+        recv_reqs = self.recv_requests()
+        self.process_input_requests(recv_reqs)
+        
+        if self._engine_paused:
+            continue
+        
+        # 2. Get the next batch to run
+        batch = self.get_next_batch_to_run()
+        self.cur_batch = batch
+        
+        # 3. Launch the current batch
+        if batch:
+            result = self.run_batch(batch)
+            self.process_batch_result(batch, result)
+        else:
+            # Idle - do self-check
+            self.self_check_during_idle()
+        
+        # 4. Update last_batch
+        self.last_batch = batch
+```
+
+Reference: `python/sglang/srt/managers/scheduler.py:1110-1135`
+
+### Batch Composition
+
+Every iteration, the scheduler rebuilds the batch:
+
+```python
+def get_next_batch_to_run(self):
+    """Get the next batch of requests to run."""
+    
+    # Check if running batch needs to continue
+    if not self.running_batch.is_empty():
+        # Process running requests
+        self.update_running_batch()
+    
+    # Try to add new requests from waiting queue
+    num_new_requests = self.add_new_requests_from_waiting_queue()
+    
+    # Return batch for execution
+    if self.running_batch.is_empty():
+        return None
+    return self.prepare_batch_for_execution(self.running_batch)
+```
+
+The key data structures:
+
+```python
+class Scheduler:
+    def init_running_status(self):
+        # Waiting queue for incoming requests
+        self.waiting_queue: List[Req] = []
+        
+        # The running decoding batch for continuous batching
+        self.running_batch: ScheduleBatch = ScheduleBatch(
+            reqs=[], batch_is_full=False
+        )
+        
+        # The current forward batch
+        self.cur_batch: Optional[ScheduleBatch] = None
+        
+        # The last forward batch  
+        self.last_batch: Optional[ScheduleBatch] = None
+```
+
+Reference: `python/sglang/srt/managers/scheduler.py:747-761`
+
+## Request Phases
+
+Requests go through distinct phases:
+
+### 1. Prefill (Extend) Phase
+
+**Purpose**: Process input tokens and generate KV cache
+
+```python
+class ForwardMode(Enum):
+    EXTEND = auto()  # Prefill phase
+    DECODE = auto()  # Decode phase
+
+if batch.forward_mode == ForwardMode.EXTEND:
+    # Process multiple tokens per request
+    # Generate KV cache for input sequence
+    # High computation, high memory allocation
+```
+
+**Characteristics**:
+- Processes all input tokens in parallel
+- Allocates KV cache memory
+- Compute-intensive (matrix multiplications)
+- One-time cost per request
+
+### 2. Decode Phase
+
+**Purpose**: Generate output tokens one at a time
+
+```python
+if batch.forward_mode == ForwardMode.DECODE:
+    # Process one token per request
+    # Append to existing KV cache  
+    # Lower computation, incremental memory
+```
+
+**Characteristics**:
+- Generates one token at a time
+- Incrementally extends KV cache
+- Memory-bandwidth-bound
+- Repeated until stopping condition
+
+<Note>
+Decode is typically memory-bandwidth-bound rather than compute-bound, so batching helps amortize memory access costs.
+</Note>
+
+## Batch Addition Logic
+
+The scheduler intelligently adds requests to the batch:
+
+```python
+class PrefillAdder:
+    def add_req(
+        self,
+        prefix_len: int,
+        extend_num_tokens: int,
+        max_new_tokens: int,
+    ) -> AddReqResult:
+        """Check if request can be added to batch."""
+        
+        # Check if batch is already full
+        if self.batch_is_full:
+            return AddReqResult.NO_SPACE
+        
+        # Check token budget
+        if extend_num_tokens > self.rem_total_tokens:
+            return AddReqResult.NO_TOKEN_BUDGET
+        
+        # Check request slot budget  
+        if self.rem_input_tokens < extend_num_tokens:
+            return AddReqResult.NO_INPUT_BUDGET
+        
+        # Allocate KV cache
+        indices = self.alloc_req_slots(extend_num_tokens)
+        if indices is None:
+            return AddReqResult.OUT_OF_MEMORY
+        
+        # Successfully added
+        self.update_budgets(extend_num_tokens, max_new_tokens)
+        return AddReqResult.ACCEPTED
+```
+
+Reference: `python/sglang/srt/managers/schedule_policy.py`
+
+### Resource Constraints
+
+Requests are admitted based on multiple constraints:
+
+1. **Token budget**: Total tokens in batch
+2. **Memory budget**: Available KV cache slots
+3. **Request budget**: Maximum concurrent requests
+4. **Batch size**: Configured limits
+
+```python
+# Check token capacity
+if total_tokens + new_request_tokens > self.max_total_num_tokens:
+    return False  # Cannot add
+
+# Check request capacity
+if num_requests >= self.max_running_requests:
+    return False  # Batch full
+
+# Check memory availability
+if available_kv_cache < required_kv_cache:
+    return False  # Out of memory
+```
+
+## Request Completion
+
+Requests complete independently:
+
+```python
+def process_batch_result(self, batch, result):
+    """Process the output of a forward batch."""
+    
+    for i, req in enumerate(batch.reqs):
+        # Get generated token
+        next_token_id = result.next_token_ids[i]
+        
+        # Check stopping conditions
+        if self.check_stop_condition(req, next_token_id):
+            req.to_finish = FINISH_MATCHED_TOKEN(next_token_id)
+        elif len(req.output_ids) >= req.sampling_params.max_new_tokens:
+            req.to_finish = FINISH_LENGTH(len(req.output_ids))
+        
+        # Remove finished requests from batch
+        if req.finished():
+            self.running_batch.remove(req)
+            self.cache_finished_req(req)
+            self.send_response(req)
+```
+
+Reference: `python/sglang/srt/managers/scheduler.py`
+
+<Info>
+Each request completes as soon as it reaches its stopping condition, freeing up resources for new requests immediately.
+</Info>
+
+## Scheduling Policies
+
+SGLang supports multiple policies for choosing which requests to add:
+
+### FCFS (First-Come-First-Served)
+
+**Simple**: Process requests in arrival order
+
+```python
+if self.policy == CacheAgnosticPolicy.FCFS:
+    # waiting_queue already in arrival order
+    pass
+```
+
+**Best for**: Fair resource allocation, predictable latency
+
+### LPM (Longest Prefix Match)
+
+**Smart**: Prioritize requests with cached prefixes
+
+```python
+if policy == CacheAwarePolicy.LPM:
+    # Sort by prefix length (longest first)
+    waiting_queue.sort(
+        key=lambda r: -len(r.prefix_indices)
+    )
+```
+
+**Best for**: Maximizing cache hits, RAG applications
+
+Reference: `python/sglang/srt/managers/schedule_policy.py:242-253`
+
+### LOF (Longest Output First)
+
+**Throughput-focused**: Schedule long jobs first
+
+```python
+if policy == CacheAgnosticPolicy.LOF:
+    waiting_queue.sort(
+        key=lambda x: -x.sampling_params.max_new_tokens
+    )
+```
+
+**Best for**: Maximizing throughput, batch jobs
+
+### Priority Scheduling
+
+**QoS-aware**: Honor request priorities
+
+```python
+if self.enable_priority_scheduling:
+    waiting_queue.sort(
+        key=lambda x: (x.priority * priority_sign, x.arrival_time)
+    )
+```
+
+**Best for**: Multi-tenant systems, SLA requirements
+
+<Tip>
+For most workloads, LPM provides the best balance of throughput and latency when prefix caching is enabled.
+</Tip>
+
+## Advanced Features
+
+### Chunked Prefill
+
+Large prefill requests can be split into chunks:
+
+```python
+# Without chunking: Prefill entire 8K tokens at once
+request = "[8000 tokens]" + " Generate response:"
+# Blocks other requests for ~2 seconds
+
+# With chunking: Split into 4 × 2K chunks
+# Chunk 1: tokens[0:2048]    - 0.5s
+# Chunk 2: tokens[2048:4096]  - 0.5s (other requests can run)
+# Chunk 3: tokens[4096:6144]  - 0.5s (other requests can run)
+# Chunk 4: tokens[6144:8000]  - 0.5s (other requests can run)
+```
+
+Configuration:
+
+```bash
+--chunked-prefill-size 2048  # Max tokens per prefill chunk
+--enable-mixed-chunk         # Mix prefill and decode in same batch
+```
+
+**Benefits**:
+- Reduces TTFT (Time to First Token) spikes
+- Improves fairness between long and short requests
+- Better interleaving of prefill and decode
+
+Reference: `python/sglang/srt/managers/scheduler.py:763-787`
+
+### Overlapped Scheduling
+
+Overlap CPU processing with GPU execution:
+
+```python
+@DynamicGradMode()
+def event_loop_overlap(self):
+    """Overlap CPU processing with GPU computation."""
+    self.result_queue: Deque = deque()
+    
+    while True:
+        # Receive new requests (CPU)
+        recv_reqs = self.recv_requests()
+        self.process_input_requests(recv_reqs)
+        
+        # Get next batch (CPU)
+        batch = self.get_next_batch_to_run()
+        
+        # Launch current batch (GPU)
+        if batch:
+            batch_result = self.run_batch(batch)
+            self.result_queue.append((batch.copy(), batch_result))
+        
+        # Process LAST batch result (CPU) while GPU runs current batch
+        if self.result_queue:
+            tmp_batch, tmp_result = self.result_queue.popleft()
+            self.process_batch_result(tmp_batch, tmp_result)
+```
+
+Reference: `python/sglang/srt/managers/scheduler.py:1137-1188`
+
+<Info>
+Overlapped scheduling can improve throughput by 10-20% by hiding CPU overhead behind GPU computation.
+</Info>
+
+### Preemption
+
+High-priority requests can preempt low-priority ones:
+
+```python
+if self.try_preemption and memory_pressure_high:
+    # Find low-priority requests to evict
+    preempt_candidates = [
+        r for r in self.running_batch.reqs 
+        if r.priority < threshold
+    ]
+    
+    # Save state and remove from batch
+    for req in preempt_candidates:
+        self.save_request_state(req)
+        self.running_batch.remove(req)
+        self.waiting_queue.insert(0, req)  # Re-queue
+```
+
+Configuration:
+
+```bash
+--enable-priority-scheduling
+--priority-scheduling-preemption-threshold 0.5
+```
+
+## Performance Optimization
+
+### Memory Estimation
+
+The scheduler estimates future memory needs:
+
+```python
+def estimate_memory_usage(self, req):
+    """Estimate memory for request's full lifetime."""
+    
+    # Current tokens
+    current_tokens = len(req.prefix_indices) + len(req.output_ids)
+    
+    # Estimated future tokens (with clipping)
+    estimated_new = min(
+        req.sampling_params.max_new_tokens,
+        CLIP_MAX_NEW_TOKENS  # Prevent over-reservation
+    )
+    
+    # Total estimate
+    total_estimated = current_tokens + estimated_new
+    return total_estimated * self.kv_cache_bytes_per_token
+```
+
+<Note>
+The scheduler uses conservative estimation to avoid OOM, controlled by `--schedule-conservativeness` (default 1.0).
+</Note>
+
+### Token Ratio Tuning
+
+Balance between prefill and decode:
+
+```python
+# Adaptive new token ratio
+self.new_token_ratio = self.init_new_token_ratio  # e.g., 0.4
+
+# Allows up to 40% of capacity for new prefill tokens
+# Remaining 60% reserved for ongoing decode
+max_prefill_tokens = self.max_total_num_tokens * self.new_token_ratio
+```
+
+Configuration:
+
+```bash
+# Set via environment variable
+export SGLANG_INIT_NEW_TOKEN_RATIO=0.4
+export SGLANG_MIN_NEW_TOKEN_RATIO_FACTOR=0.5  # Min ratio = 0.4 * 0.5 = 0.2
+```
+
+### Batch Size Limits
+
+Control batch size:
+
+```python
+--max-running-requests 256    # Maximum concurrent requests
+--max-total-num-tokens 16384  # Total token capacity
+--max-prefill-tokens 4096     # Max tokens in prefill phase
+```
+
+## Monitoring and Metrics
+
+Key metrics to track:
+
+```python
+# Throughput
+tokens_per_second = total_output_tokens / wall_clock_time
+requests_per_second = total_requests / wall_clock_time
+
+# Latency  
+ttft = time_to_first_token  # Prefill latency
+tpot = time_per_output_token  # Decode latency
+e2e_latency = request_completion_time - request_arrival_time
+
+# Utilization
+batch_occupancy = len(running_batch.reqs) / max_running_requests
+memory_utilization = used_kv_cache / total_kv_cache
+queue_depth = len(waiting_queue)
+```
+
+<Tip>
+Monitor queue depth closely - sustained queue growth indicates capacity issues.
+</Tip>
+
+## Best Practices
+
+1. **Right-size batch limits**: Balance latency and throughput
+   - Smaller batches: Lower latency, lower throughput
+   - Larger batches: Higher latency, higher throughput
+
+2. **Use appropriate scheduling policy**:
+   - FCFS for fairness
+   - LPM for cache-heavy workloads
+   - Priority for multi-tenant systems
+
+3. **Enable chunked prefill for mixed workloads**:
+   - Prevents long prefills from blocking short requests
+   - Set chunk size to ~2048 tokens
+
+4. **Configure memory conservatively**:
+   - Leave 10-20% headroom for scheduling flexibility
+   - Avoid OOM which degrades performance severely
+
+5. **Monitor and tune**:
+   - Watch queue depth and batch utilization
+   - Adjust token ratios based on workload
+   - Profile to identify bottlenecks
+
+## Common Issues
+
+### Request Starvation
+
+**Symptom**: Some requests wait very long in queue
+
+**Solution**: 
+- Use FCFS or priority scheduling
+- Enable preemption for high-priority requests
+- Reduce max_new_tokens limits
+
+### Low GPU Utilization
+
+**Symptom**: GPU not fully utilized
+
+**Solution**:
+- Increase max_running_requests
+- Increase max_total_num_tokens  
+- Enable overlapped scheduling
+- Check for CPU bottlenecks
+
+### High Memory Pressure
+
+**Symptom**: Frequent eviction, OOM errors
+
+**Solution**:
+- Increase mem_fraction_static
+- Reduce max_running_requests
+- Enable KV cache quantization
+- Use more aggressive eviction policy
+
+## Related Topics
+
+- [System Architecture](/concepts/architecture) - Overall system design
+- [Prefix Caching](/concepts/prefix-caching) - Cache management with batching
+- [RadixAttention](/concepts/radix-attention) - Attention with shared prefixes

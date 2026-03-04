@@ -1,0 +1,489 @@
+---
+title: Backend Configuration
+description: Configure SGLang to work with different LLM backends and providers
+---
+
+SGLang's frontend language supports multiple backend providers, allowing you to use the same code with local models, hosted services, or cloud APIs. This page covers how to configure and use different backends.
+
+## Setting the Default Backend
+
+Before executing SGLang functions, you must set a default backend:
+
+```python
+import sglang as sgl
+
+# Set the backend
+sgl.set_default_backend(backend)
+
+# Now you can run functions
+state = my_function.run()
+```
+
+You can also override the backend for individual calls:
+
+```python
+state = my_function.run(backend=alternative_backend)
+```
+
+## Local Runtime
+
+### `sgl.Runtime` - Local Model Server
+
+Run models locally using SGLang's high-performance runtime:
+
+```python
+import sglang as sgl
+
+# Launch local runtime
+runtime = sgl.Runtime(
+    model_path="meta-llama/Llama-2-7b-chat-hf",
+    port=30000,
+)
+sgl.set_default_backend(runtime)
+
+# Use the runtime
+state = my_function.run()
+
+# Shutdown when done
+runtime.shutdown()
+```
+
+**Parameters:**
+
+- `model_path` (str): HuggingFace model path or local path to model
+- `tokenizer_path` (str): Path to tokenizer (defaults to model_path)
+- `port` (int): Port for the HTTP server (auto-allocated if not specified)
+- `host` (str): Host address (default: "127.0.0.1")
+- `tp_size` (int): Tensor parallelism size for multi-GPU
+- `log_level` (str): Logging level ("error", "warning", "info", "debug")
+- `launch_timeout` (float): Timeout for server startup (default: 300s)
+- Additional parameters from `ServerArgs` (see server documentation)
+
+**Example with Tensor Parallelism:**
+
+```python
+# Use 4 GPUs for a large model
+runtime = sgl.Runtime(
+    model_path="meta-llama/Llama-2-70b-chat-hf",
+    tp_size=4,
+)
+sgl.set_default_backend(runtime)
+```
+
+**Example with Custom Chat Template:**
+
+```python
+from sglang.lang.chat_template import get_chat_template
+
+runtime = sgl.Runtime(
+    model_path="lmms-lab/llama3-llava-next-8b",
+)
+runtime.endpoint.chat_template = get_chat_template("llama-3-instruct-llava")
+sgl.set_default_backend(runtime)
+```
+
+### `sgl.RuntimeEndpoint` - Connect to Running Server
+
+Connect to an already-running SGLang server:
+
+```python
+import sglang as sgl
+
+# Connect to existing server
+backend = sgl.RuntimeEndpoint("http://localhost:30000")
+sgl.set_default_backend(backend)
+```
+
+**Parameters:**
+
+- `base_url` (str): URL of the running SGLang server
+- `api_key` (Optional[str]): API key for authentication
+- `verify` (Optional[str]): SSL verification (path to cert or False)
+- `chat_template_name` (Optional[str]): Override chat template
+
+**Example with API Key:**
+
+```python
+backend = sgl.RuntimeEndpoint(
+    "https://api.example.com",
+    api_key="your-api-key"
+)
+sgl.set_default_backend(backend)
+```
+
+### Starting a Server Separately
+
+You can also start the server via command line:
+
+```bash
+python -m sglang.launch_server \
+    --model-path meta-llama/Llama-2-7b-chat-hf \
+    --port 30000
+```
+
+Then connect with `RuntimeEndpoint`:
+
+```python
+sgl.set_default_backend(sgl.RuntimeEndpoint("http://localhost:30000"))
+```
+
+## OpenAI
+
+### `sgl.OpenAI` - OpenAI API
+
+Use OpenAI models:
+
+```python
+import sglang as sgl
+import os
+
+# Set API key (or use environment variable OPENAI_API_KEY)
+os.environ["OPENAI_API_KEY"] = "sk-..."
+
+# Chat models
+sgl.set_default_backend(sgl.OpenAI("gpt-4"))
+sgl.set_default_backend(sgl.OpenAI("gpt-3.5-turbo"))
+sgl.set_default_backend(sgl.OpenAI("gpt-4-turbo"))
+
+# Completion models
+sgl.set_default_backend(sgl.OpenAI("gpt-3.5-turbo-instruct"))
+```
+
+**Parameters:**
+
+- `model_name` (str): OpenAI model name
+- `is_chat_model` (Optional[bool]): Whether this is a chat model (auto-detected)
+- `chat_template` (Optional[ChatTemplate]): Custom chat template
+- `api_key` (str): API key (defaults to OPENAI_API_KEY env var)
+- `base_url` (str): Custom base URL for API
+- Other parameters passed to `openai.OpenAI()`
+
+**Example with Custom Parameters:**
+
+```python
+backend = sgl.OpenAI(
+    "gpt-4",
+    api_key="sk-...",
+    timeout=60.0,
+    max_retries=3,
+)
+sgl.set_default_backend(backend)
+```
+
+**Using Different Models:**
+
+```python
+@sgl.function
+def my_function(s, query):
+    s += sgl.user(query)
+    s += sgl.assistant(sgl.gen("answer", max_tokens=100))
+
+# Run with different OpenAI models
+state1 = my_function.run(query="Hello", backend=sgl.OpenAI("gpt-3.5-turbo"))
+state2 = my_function.run(query="Hello", backend=sgl.OpenAI("gpt-4"))
+```
+
+**Vision Models:**
+
+```python
+sgl.set_default_backend(sgl.OpenAI("gpt-4-vision-preview"))
+
+@sgl.function
+def analyze_image(s, image_path, question):
+    s += sgl.user(sgl.image(image_path) + question)
+    s += sgl.assistant(sgl.gen("answer"))
+
+state = analyze_image.run(
+    image_path="photo.jpg",
+    question="What's in this image?"
+)
+```
+
+**O1 Models:**
+
+```python
+sgl.set_default_backend(sgl.OpenAI("o1-mini"))
+# Note: o1 models have specific constraints on parameters
+```
+
+## Azure OpenAI
+
+### Azure Configuration
+
+Use Azure OpenAI Service:
+
+```python
+import sglang as sgl
+import os
+
+# Set environment variables
+os.environ["AZURE_OPENAI_API_KEY"] = "your-key"
+os.environ["AZURE_OPENAI_ENDPOINT"] = "https://your-resource.openai.azure.com/"
+
+backend = sgl.OpenAI(
+    model_name="gpt-35-turbo",  # Your deployment name
+    is_azure=True,
+    api_key=os.environ["AZURE_OPENAI_API_KEY"],
+    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+    api_version="2024-02-15-preview",
+)
+sgl.set_default_backend(backend)
+```
+
+## Anthropic
+
+### `sgl.Anthropic` - Claude Models
+
+Use Anthropic's Claude models:
+
+```python
+import sglang as sgl
+import os
+
+# Set API key (or use environment variable ANTHROPIC_API_KEY)
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+sgl.set_default_backend(sgl.Anthropic("claude-3-opus-20240229"))
+sgl.set_default_backend(sgl.Anthropic("claude-3-sonnet-20240229"))
+sgl.set_default_backend(sgl.Anthropic("claude-3-haiku-20240307"))
+```
+
+**Parameters:**
+
+- `model_name` (str): Claude model name
+- `api_key` (str): API key (defaults to ANTHROPIC_API_KEY env var)
+- Other parameters passed to `anthropic.Anthropic()`
+
+**Example:**
+
+```python
+@sgl.function
+def multi_turn_question(s, question_1, question_2):
+    s += sgl.user(question_1)
+    s += sgl.assistant(sgl.gen("answer_1", max_tokens=256))
+    s += sgl.user(question_2)
+    s += sgl.assistant(sgl.gen("answer_2", max_tokens=256))
+
+sgl.set_default_backend(sgl.Anthropic("claude-3-haiku-20240307"))
+
+state = multi_turn_question.run(
+    question_1="What is the capital of the United States?",
+    question_2="List two local attractions.",
+)
+
+for m in state.messages():
+    print(m["role"], ":", m["content"])
+```
+
+**Note:** Anthropic automatically handles system messages from the messages array.
+
+## Other Cloud Providers
+
+### Google Vertex AI
+
+Use Google's Gemini models via Vertex AI:
+
+```python
+import sglang as sgl
+
+backend = sgl.VertexAI(
+    "gemini-pro",
+    project_id="your-project-id",
+    location="us-central1",
+)
+sgl.set_default_backend(backend)
+```
+
+**Vision Models:**
+
+```python
+backend = sgl.VertexAI("gemini-pro-vision")
+sgl.set_default_backend(backend)
+
+@sgl.function
+def image_qa(s, image_path, question):
+    s += sgl.user(sgl.image(image_path) + question)
+    s += sgl.assistant(sgl.gen("answer"))
+```
+
+### LiteLLM (Multiple Providers)
+
+Use LiteLLM to access multiple providers with a unified interface:
+
+```python
+import sglang as sgl
+
+# Works with OpenRouter, Together AI, Replicate, etc.
+backend = sgl.LiteLLM(
+    model="together_ai/meta-llama/Llama-3-70b-chat-hf",
+    api_key="your-key",
+)
+sgl.set_default_backend(backend)
+```
+
+## Backend Utilities
+
+### Getting Server Information
+
+```python
+# For Runtime or RuntimeEndpoint
+info = sgl.get_server_info(backend)
+print(info)
+```
+
+### Flushing Cache
+
+Clear the KV cache on the server:
+
+```python
+sgl.flush_cache(backend)
+# Or use default backend
+sgl.flush_cache()
+```
+
+### Profiling
+
+For Runtime backends, enable profiling:
+
+```python
+runtime = sgl.Runtime(model_path="meta-llama/Llama-2-7b-chat-hf")
+runtime.start_profile()
+
+# Run your functions
+state = my_function.run()
+
+runtime.stop_profile()
+```
+
+## Complete Examples
+
+### Multi-Backend Function
+
+```python
+import sglang as sgl
+
+@sgl.function
+def universal_qa(s, question):
+    s += sgl.user(question)
+    s += sgl.assistant(sgl.gen("answer", max_tokens=100))
+
+# Try with different backends
+backends = [
+    sgl.OpenAI("gpt-3.5-turbo"),
+    sgl.Anthropic("claude-3-haiku-20240307"),
+    sgl.RuntimeEndpoint("http://localhost:30000"),
+]
+
+for backend in backends:
+    state = universal_qa.run(
+        question="What is the capital of France?",
+        backend=backend
+    )
+    print(f"{backend}: {state['answer']}")
+```
+
+### Local Runtime with Multimodal Model
+
+```python
+import sglang as sgl
+from sglang.lang.chat_template import get_chat_template
+import multiprocessing as mp
+
+mp.set_start_method("spawn", force=True)
+
+@sgl.function
+def image_qa(s, image_path, question):
+    s += sgl.user(sgl.image(image_path) + question)
+    s += sgl.assistant(sgl.gen("answer"))
+
+# Launch runtime with vision model
+runtime = sgl.Runtime(model_path="lmms-lab/llama3-llava-next-8b")
+runtime.endpoint.chat_template = get_chat_template("llama-3-instruct-llava")
+sgl.set_default_backend(runtime)
+
+state = image_qa.run(
+    image_path="images/cat.jpeg",
+    question="What is this?",
+    max_new_tokens=128
+)
+
+print(state["answer"])
+runtime.shutdown()
+```
+
+### Batch Processing with Local Runtime
+
+```python
+import sglang as sgl
+
+@sgl.function
+def text_qa(s, question):
+    s += "Q: " + question + "\n"
+    s += "A:" + sgl.gen("answer", stop="\n")
+
+runtime = sgl.Runtime(
+    model_path="meta-llama/Llama-2-7b-chat-hf",
+    tp_size=1,
+)
+sgl.set_default_backend(runtime)
+
+# Process batch
+states = text_qa.run_batch(
+    [
+        {"question": "What is the capital of the United Kingdom?"},
+        {"question": "What is the capital of France?"},
+        {"question": "What is the capital of Japan?"},
+    ],
+    progress_bar=True,
+    num_threads="auto",
+)
+
+for s in states:
+    print(s.text())
+
+runtime.shutdown()
+```
+
+### Together AI via LiteLLM
+
+```python
+import sglang as sgl
+import os
+
+os.environ["TOGETHER_API_KEY"] = "your-key"
+
+@sgl.function
+def chat(s, message):
+    s += sgl.user(message)
+    s += sgl.assistant(sgl.gen("response", max_tokens=100))
+
+backend = sgl.LiteLLM(
+    model="together_ai/meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
+)
+sgl.set_default_backend(backend)
+
+state = chat.run(message="Hello, how are you?")
+print(state["response"])
+```
+
+## Backend Comparison
+
+| Backend | Local/Cloud | Multimodal | Streaming | Batch | Best For |
+|---------|-------------|------------|-----------|-------|----------|
+| `Runtime` | Local | Yes | Yes | Yes | Production, local deployment |
+| `RuntimeEndpoint` | Remote | Yes | Yes | Yes | Distributed systems |
+| `OpenAI` | Cloud | Yes | Yes | Yes | Quick prototyping, GPT models |
+| `Anthropic` | Cloud | No | Yes | Yes | Claude models |
+| `VertexAI` | Cloud | Yes | Yes | Yes | Google Cloud integration |
+| `LiteLLM` | Cloud | Varies | Yes | Yes | Multi-provider support |
+
+## Best Practices
+
+1. **Development vs Production**: Use `OpenAI` or `Anthropic` for prototyping, `Runtime` for production
+2. **Resource Management**: Always call `runtime.shutdown()` when done with local runtimes
+3. **Error Handling**: Wrap backend initialization in try-except blocks
+4. **API Keys**: Use environment variables instead of hardcoding keys
+5. **Timeout Configuration**: Set appropriate timeouts for your use case
+6. **Model Selection**: Choose models based on task requirements (speed vs quality)
+7. **Batch Processing**: Use local `Runtime` for high-throughput batch jobs
+8. **Testing**: Test with multiple backends to ensure compatibility

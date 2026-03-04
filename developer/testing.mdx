@@ -1,0 +1,600 @@
+---
+title: Testing
+description: Testing guidelines and best practices for SGLang
+---
+
+# Testing
+
+This guide covers testing practices, test structure, and how to write effective tests for SGLang.
+
+## Test Structure
+
+SGLang tests are organized in the `test/` directory:
+
+```
+test/
+├── srt/                    # Runtime tests
+│   ├── test_engine.py     # Engine tests
+│   ├── test_models.py     # Model tests
+│   └── ...
+├── lang/                   # Frontend language tests
+└── utils/                  # Test utilities
+```
+
+## Running Tests
+
+### Run All Tests
+
+```bash
+# Run all tests
+python -m pytest test/
+
+# Run with verbose output
+python -m pytest test/ -v
+
+# Run with coverage
+python -m pytest test/ --cov=sglang --cov-report=html
+```
+
+### Run Specific Tests
+
+```bash
+# Run specific test file
+python -m pytest test/srt/test_engine.py
+
+# Run specific test class
+python -m pytest test/srt/test_engine.py::TestEngine
+
+# Run specific test method
+python -m pytest test/srt/test_engine.py::TestEngine::test_generate
+
+# Run tests matching pattern
+python -m pytest test/ -k "test_batch"
+```
+
+### Run Tests in Parallel
+
+```bash
+# Install pytest-xdist
+pip install pytest-xdist
+
+# Run tests in parallel
+python -m pytest test/ -n auto
+```
+
+## Writing Tests
+
+### Basic Test Structure
+
+```python
+import unittest
+from sglang import Engine
+
+class TestMyFeature(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Set up test fixtures (runs once per class)."""
+        cls.engine = Engine(
+            model_path="meta-llama/Llama-3.2-1B",
+            trust_remote_code=True,
+        )
+    
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up after tests."""
+        cls.engine.shutdown()
+    
+    def test_basic_generation(self):
+        """Test basic text generation."""
+        output = self.engine.generate(
+            prompt="Hello",
+            sampling_params={"max_new_tokens": 16}
+        )
+        self.assertIn("text", output)
+        self.assertGreater(len(output["text"]), 0)
+    
+    def test_batch_generation(self):
+        """Test batch generation."""
+        prompts = ["Hello", "Hi there", "Good morning"]
+        outputs = self.engine.generate(
+            prompt=prompts,
+            sampling_params={"max_new_tokens": 16}
+        )
+        self.assertEqual(len(outputs), len(prompts))
+        for output in outputs:
+            self.assertIn("text", output)
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+### Testing with HTTP Server
+
+```python
+import unittest
+import requests
+import subprocess
+import time
+import signal
+
+class TestHTTPServer(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        """Launch server before tests."""
+        cls.server = subprocess.Popen([
+            "python", "-m", "sglang.launch_server",
+            "--model-path", "meta-llama/Llama-3.2-1B",
+            "--host", "127.0.0.1",
+            "--port", "30000",
+        ])
+        # Wait for server to be ready
+        cls._wait_for_server()
+    
+    @classmethod
+    def tearDownClass(cls):
+        """Shutdown server after tests."""
+        cls.server.send_signal(signal.SIGINT)
+        cls.server.wait(timeout=30)
+    
+    @classmethod
+    def _wait_for_server(cls, timeout=60):
+        """Wait for server to be ready."""
+        url = "http://127.0.0.1:30000/health"
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                response = requests.get(url)
+                if response.status_code == 200:
+                    return
+            except requests.ConnectionError:
+                pass
+            time.sleep(1)
+        raise TimeoutError("Server did not start in time")
+    
+    def test_chat_completion(self):
+        """Test chat completion endpoint."""
+        response = requests.post(
+            "http://127.0.0.1:30000/v1/chat/completions",
+            json={
+                "model": "meta-llama/Llama-3.2-1B",
+                "messages": [{"role": "user", "content": "Hello"}],
+                "max_completion_tokens": 16,
+            }
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("choices", data)
+        self.assertGreater(len(data["choices"]), 0)
+```
+
+### Testing Async Code
+
+```python
+import unittest
+import asyncio
+from sglang import Engine
+
+class TestAsyncGeneration(unittest.TestCase):
+    def setUp(self):
+        self.engine = Engine(model_path="meta-llama/Llama-3.2-1B")
+    
+    def tearDown(self):
+        self.engine.shutdown()
+    
+    def test_async_generate(self):
+        """Test async generation."""
+        async def run_test():
+            output = await self.engine.async_generate(
+                prompt="Hello",
+                sampling_params={"max_new_tokens": 16}
+            )
+            self.assertIn("text", output)
+            return output
+        
+        # Run async test
+        output = asyncio.run(run_test())
+        self.assertIsNotNone(output)
+```
+
+## Test Utilities
+
+### Reusable Fixtures
+
+Create shared fixtures in `test/test_utils.py`:
+
+```python
+# test/test_utils.py
+from sglang import Engine
+
+DEFAULT_PROMPTS = [
+    "Once upon a time",
+    "In a galaxy far far away",
+    "The quick brown fox",
+]
+
+class EngineFixture:
+    """Reusable engine fixture."""
+    
+    @classmethod
+    def create_engine(cls, model_path="meta-llama/Llama-3.2-1B", **kwargs):
+        """Create engine with default settings."""
+        return Engine(
+            model_path=model_path,
+            trust_remote_code=True,
+            log_level="error",
+            **kwargs
+        )
+```
+
+Use in tests:
+
+```python
+from test.test_utils import EngineFixture, DEFAULT_PROMPTS
+
+class TestWithFixture(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.engine = EngineFixture.create_engine()
+    
+    def test_with_defaults(self):
+        outputs = self.engine.generate(
+            prompt=DEFAULT_PROMPTS[:2],
+            sampling_params={"max_new_tokens": 16}
+        )
+        self.assertEqual(len(outputs), 2)
+```
+
+### Assertions
+
+```python
+class TestAssertions(unittest.TestCase):
+    def test_output_format(self):
+        output = self.engine.generate(prompt="Hello")
+        
+        # Check structure
+        self.assertIsInstance(output, dict)
+        self.assertIn("text", output)
+        self.assertIn("meta_info", output)
+        
+        # Check types
+        self.assertIsInstance(output["text"], str)
+        self.assertIsInstance(output["meta_info"], dict)
+        
+        # Check values
+        self.assertGreater(len(output["text"]), 0)
+        self.assertIn("prompt_tokens", output["meta_info"])
+        self.assertGreater(output["meta_info"]["prompt_tokens"], 0)
+```
+
+## Performance Testing
+
+### Throughput Test
+
+```python
+import time
+
+class TestPerformance(unittest.TestCase):
+    def test_throughput(self):
+        """Test generation throughput."""
+        num_requests = 100
+        prompts = ["Hello world"] * num_requests
+        
+        start = time.time()
+        outputs = self.engine.generate(
+            prompt=prompts,
+            sampling_params={"max_new_tokens": 16}
+        )
+        duration = time.time() - start
+        
+        throughput = num_requests / duration
+        print(f"Throughput: {throughput:.2f} req/s")
+        
+        # Assert minimum throughput
+        self.assertGreater(throughput, 10.0)  # At least 10 req/s
+```
+
+### Latency Test
+
+```python
+class TestLatency(unittest.TestCase):
+    def test_latency(self):
+        """Test generation latency."""
+        latencies = []
+        
+        for _ in range(10):
+            start = time.time()
+            self.engine.generate(
+                prompt="Hello",
+                sampling_params={"max_new_tokens": 16}
+            )
+            latency = time.time() - start
+            latencies.append(latency)
+        
+        avg_latency = sum(latencies) / len(latencies)
+        print(f"Average latency: {avg_latency*1000:.2f}ms")
+        
+        # Assert maximum latency
+        self.assertLess(avg_latency, 1.0)  # Less than 1 second
+```
+
+## Integration Testing
+
+### End-to-End Test
+
+```python
+class TestEndToEnd(unittest.TestCase):
+    """End-to-end integration tests."""
+    
+    def test_chat_conversation(self):
+        """Test multi-turn conversation."""
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What is 2+2?"}
+        ]
+        
+        # First turn
+        output1 = self.engine.generate(
+            messages=messages,
+            sampling_params={"max_new_tokens": 32}
+        )
+        self.assertIn("4", output1["text"])
+        
+        # Second turn
+        messages.append({"role": "assistant", "content": output1["text"]})
+        messages.append({"role": "user", "content": "What about 3+3?"})
+        
+        output2 = self.engine.generate(
+            messages=messages,
+            sampling_params={"max_new_tokens": 32}
+        )
+        self.assertIn("6", output2["text"])
+```
+
+## Accuracy Testing
+
+### GSM8K Test
+
+```python
+import json
+import re
+
+class TestAccuracy(unittest.TestCase):
+    def test_gsm8k_few_shot(self):
+        """Test GSM8K accuracy."""
+        # Load GSM8K examples
+        with open("test/data/gsm8k_test.jsonl") as f:
+            examples = [json.loads(line) for line in f][:100]
+        
+        correct = 0
+        for example in examples:
+            question = example["question"]
+            answer = example["answer"]
+            
+            # Generate response
+            output = self.engine.generate(
+                prompt=f"Question: {question}\nAnswer:",
+                sampling_params={"max_new_tokens": 256, "temperature": 0}
+            )
+            
+            # Extract predicted answer
+            pred = self._extract_answer(output["text"])
+            gold = self._extract_answer(answer)
+            
+            if pred == gold:
+                correct += 1
+        
+        accuracy = correct / len(examples)
+        print(f"GSM8K Accuracy: {accuracy*100:.2f}%")
+        
+        # Assert minimum accuracy
+        self.assertGreater(accuracy, 0.70)  # At least 70% accuracy
+    
+    def _extract_answer(self, text):
+        """Extract numerical answer from text."""
+        match = re.search(r"####\s*([\d,]+)", text)
+        if match:
+            return match.group(1).replace(",", "")
+        return None
+```
+
+## Mocking and Fixtures
+
+### Mock External Dependencies
+
+```python
+from unittest.mock import Mock, patch
+
+class TestWithMocks(unittest.TestCase):
+    @patch('requests.post')
+    def test_api_call(self, mock_post):
+        """Test with mocked API call."""
+        mock_post.return_value.status_code = 200
+        mock_post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "Hello"}}]
+        }
+        
+        # Your test code here
+        response = requests.post("http://example.com")
+        self.assertEqual(response.status_code, 200)
+```
+
+## Test Best Practices
+
+### Keep Tests Fast
+
+- Reuse server instances across tests (use `setUpClass`)
+- Use small models for testing (e.g., Llama-3.2-1B)
+- Set short `max_new_tokens` for speed
+- Split long test files into multiple files
+
+### Make Tests Deterministic
+
+```python
+def test_deterministic_output(self):
+    """Test deterministic generation."""
+    sampling_params = {
+        "max_new_tokens": 16,
+        "temperature": 0,  # Deterministic
+        "seed": 42,
+    }
+    
+    output1 = self.engine.generate(prompt="Hello", sampling_params=sampling_params)
+    output2 = self.engine.generate(prompt="Hello", sampling_params=sampling_params)
+    
+    self.assertEqual(output1["text"], output2["text"])
+```
+
+### Test Error Handling
+
+```python
+def test_invalid_model(self):
+    """Test error handling for invalid model."""
+    with self.assertRaises(ValueError):
+        Engine(model_path="nonexistent/model")
+
+def test_invalid_params(self):
+    """Test error handling for invalid params."""
+    with self.assertRaises(ValueError):
+        self.engine.generate(
+            prompt="Hello",
+            sampling_params={"temperature": -1}  # Invalid
+        )
+```
+
+### Use Descriptive Test Names
+
+```python
+# Good
+def test_batch_generation_with_different_lengths(self):
+    pass
+
+# Bad
+def test_batch(self):
+    pass
+```
+
+### Document Tests
+
+```python
+def test_streaming_with_function_calling(self):
+    """Test that streaming works correctly with function calling.
+    
+    This test verifies that:
+    1. Function calls are properly streamed
+    2. Arguments are accumulated correctly
+    3. Final message contains complete function call
+    """
+    # Test code here
+```
+
+## CI Integration
+
+### GitHub Actions
+
+Tests run automatically in CI. See workflow configuration in `.github/workflows/`.
+
+### Skipping Slow Tests
+
+```python
+import unittest
+
+class TestSlow(unittest.TestCase):
+    @unittest.skipIf(os.getenv("CI") == "true", "Slow test, skip in CI")
+    def test_expensive_operation(self):
+        """This test is too slow for CI."""
+        pass
+```
+
+## Debugging Tests
+
+### Print Debug Info
+
+```python
+def test_with_debug(self):
+    output = self.engine.generate(prompt="Hello")
+    
+    # Print for debugging
+    print(f"Output: {output}")
+    print(f"Tokens: {output['meta_info']['completion_tokens']}")
+    
+    self.assertGreater(output["meta_info"]["completion_tokens"], 0)
+```
+
+### Run Single Test with Verbose Output
+
+```bash
+python -m pytest test/srt/test_engine.py::TestEngine::test_generate -v -s
+```
+
+### Use Python Debugger
+
+```python
+def test_with_debugger(self):
+    output = self.engine.generate(prompt="Hello")
+    
+    import pdb; pdb.set_trace()  # Debugger breakpoint
+    
+    self.assertIn("text", output)
+```
+
+## Common Patterns
+
+### Parameterized Tests
+
+```python
+import unittest
+from parameterized import parameterized
+
+class TestParameterized(unittest.TestCase):
+    @parameterized.expand([
+        ("short", 16),
+        ("medium", 64),
+        ("long", 256),
+    ])
+    def test_different_lengths(self, name, max_tokens):
+        """Test with different output lengths."""
+        output = self.engine.generate(
+            prompt="Hello",
+            sampling_params={"max_new_tokens": max_tokens}
+        )
+        self.assertLessEqual(
+            output["meta_info"]["completion_tokens"],
+            max_tokens
+        )
+```
+
+### Temporary Files
+
+```python
+import tempfile
+import os
+
+class TestWithFiles(unittest.TestCase):
+    def test_with_temp_file(self):
+        """Test with temporary file."""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+            f.write("test data")
+            temp_path = f.name
+        
+        try:
+            # Use temp file
+            with open(temp_path) as f:
+                data = f.read()
+            self.assertEqual(data, "test data")
+        finally:
+            # Clean up
+            os.unlink(temp_path)
+```
+
+## Resources
+
+- [pytest Documentation](https://docs.pytest.org/)
+- [unittest Documentation](https://docs.python.org/3/library/unittest.html)
+- [SGLang Test Examples](https://github.com/sgl-project/sglang/tree/main/test)
+- [Testing Best Practices](https://docs.python-guide.org/writing/tests/)
+
+## Next Steps
+
+- [Contribution Guide](/developer/contribution-guide) - Submit your changes
+- [Benchmark and Profiling](/developer/benchmark-profiling) - Performance testing
+- [Adding Models](/developer/adding-models) - Test new models

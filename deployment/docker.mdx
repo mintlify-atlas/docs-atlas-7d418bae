@@ -1,0 +1,425 @@
+---
+title: Docker Deployment
+description: Deploy SGLang using Docker containers for production and development environments
+---
+
+## Overview
+
+SGLang provides official Docker images optimized for both production inference and development. This guide covers Docker-based deployment options including standalone containers, Docker Compose, and custom builds.
+
+## Quick Start
+
+### Using Pre-built Images
+
+Pull the latest SGLang image from Docker Hub:
+
+```bash
+docker pull lmsysorg/sglang:latest
+```
+
+### Run a Single Container
+
+Deploy a model with a single command:
+
+```bash
+docker run -d \
+  --name sglang \
+  --gpus all \
+  --network host \
+  --privileged \
+  --ipc host \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -e HF_TOKEN=<your_token> \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  lmsysorg/sglang:latest \
+  python3 -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --host 0.0.0.0 \
+  --port 30000
+```
+
+### Docker Compose Deployment
+
+Use Docker Compose for declarative container management:
+
+```yaml
+services:
+  sglang:
+    image: lmsysorg/sglang:latest
+    container_name: sglang
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+      # If you use modelscope, mount this directory
+      # - ${HOME}/.cache/modelscope:/root/.cache/modelscope
+    restart: always
+    network_mode: host # required by RDMA
+    privileged: true # required by RDMA
+    # Or you can only publish port 30000
+    # ports:
+    #   - 30000:30000
+    environment:
+      - HF_TOKEN=<secret>
+      # if you use modelscope to download model, set this environment
+      # - SGLANG_USE_MODELSCOPE=true
+    entrypoint: python3 -m sglang.launch_server
+    command: --model-path meta-llama/Llama-3.1-8B-Instruct
+      --host 0.0.0.0
+      --port 30000
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ipc: host
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:30000/health || exit 1"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+```
+
+Save this as `compose.yaml` and run:
+
+```bash
+docker compose up -d
+```
+
+## Available Docker Images
+
+SGLang provides several specialized images:
+
+| Image Tag | Description | Use Case |
+|-----------|-------------|----------|
+| `lmsysorg/sglang:latest` | Latest stable release | Production inference |
+| `lmsysorg/sglang:deepep` | DeepEP-enabled build | Multi-node MoE models |
+| `lmsysorg/sglang:v<version>` | Specific version | Version pinning |
+
+### Specialized Dockerfiles
+
+The repository includes Dockerfiles for specific hardware:
+
+- **rocm.Dockerfile**: AMD GPUs with ROCm support
+- **xpu.Dockerfile**: Intel GPUs
+- **npu.Dockerfile**: Ascend NPUs
+- **xeon.Dockerfile**: Intel Xeon CPUs
+- **diffusion.Dockerfile**: Diffusion model serving
+- **gateway.Dockerfile**: Model routing gateway
+
+## Building Custom Images
+
+### Build from Source
+
+Build the standard CUDA image:
+
+```bash
+cd /path/to/sglang
+docker build \
+  --build-arg CUDA_VERSION=12.9.1 \
+  --build-arg SGL_VERSION=0.3.21 \
+  --build-arg BUILD_TYPE=all \
+  -f docker/Dockerfile \
+  -t sglang:custom .
+```
+
+### Build Arguments
+
+Customize your build with these arguments:
+
+```bash
+# CUDA version selection
+--build-arg CUDA_VERSION=12.9.1  # Options: 12.6.1, 12.8.1, 12.9.1, 13.0.1
+
+# SGLang version
+--build-arg SGL_VERSION=0.3.21
+--build-arg USE_LATEST_SGLANG=0  # Set to 1 to build from main branch
+
+# Build type
+--build-arg BUILD_TYPE=all  # Options: all, minimal
+
+# Branch type
+--build-arg BRANCH_TYPE=remote  # Options: remote, local
+
+# Hardware-specific builds
+--build-arg GRACE_BLACKWELL=0  # Enable GB200 support
+--build-arg HOPPER_SBO=0       # Enable Hopper optimizations
+
+# Package versions
+--build-arg SGL_KERNEL_VERSION=0.3.21
+--build-arg FLASHINFER_VERSION=0.6.4
+--build-arg MOONCAKE_VERSION=0.3.9
+
+# Mirror configuration
+--build-arg PIP_DEFAULT_INDEX=https://pypi.org/simple
+--build-arg UBUNTU_MIRROR=http://archive.ubuntu.com/ubuntu
+--build-arg GITHUB_ARTIFACTORY=github.com
+```
+
+### Multi-Stage Build Targets
+
+The Dockerfile supports multiple build targets:
+
+#### Runtime Image (Default)
+
+Production-ready with JIT compilation support:
+
+```bash
+docker build -t sglang:runtime --target runtime -f docker/Dockerfile .
+```
+
+#### Framework Development Image
+
+Includes development tools (vim, tmux, gdb, nsight):
+
+```bash
+docker build -t sglang:dev --target framework -f docker/Dockerfile .
+```
+
+### ROCm Image for AMD GPUs
+
+Build for AMD MI300X or MI350X:
+
+```bash
+# For MI300X with ROCm 7.0
+docker build \
+  --build-arg SGL_BRANCH=v0.5.9 \
+  --build-arg GPU_ARCH=gfx942 \
+  -t sglang:rocm700-mi30x \
+  -f docker/rocm.Dockerfile .
+
+# For MI300X with ROCm 7.2
+docker build \
+  --build-arg SGL_BRANCH=v0.5.9 \
+  --build-arg GPU_ARCH=gfx942-rocm720 \
+  -t sglang:rocm720-mi30x \
+  -f docker/rocm.Dockerfile .
+
+# For MI350X with ROCm 7.0
+docker build \
+  --build-arg SGL_BRANCH=v0.5.9 \
+  --build-arg GPU_ARCH=gfx950 \
+  -t sglang:rocm700-mi35x \
+  -f docker/rocm.Dockerfile .
+```
+
+## Container Configuration
+
+### Volume Mounts
+
+Essential volume mounts for production:
+
+```bash
+# Model cache (HuggingFace)
+-v ~/.cache/huggingface:/root/.cache/huggingface
+
+# Model cache (ModelScope)
+-v ~/.cache/modelscope:/root/.cache/modelscope
+
+# Shared memory (required for large models)
+--shm-size=10g
+# Or use host IPC
+--ipc host
+```
+
+### Network Configuration
+
+#### Host Network (Recommended for RDMA)
+
+```bash
+--network host
+--privileged  # Required for RDMA access
+```
+
+#### Bridge Network
+
+```bash
+-p 30000:30000  # Map container port to host
+```
+
+### Environment Variables
+
+Common environment variables:
+
+```bash
+# Authentication
+-e HF_TOKEN=<your_huggingface_token>
+
+# Model source
+-e SGLANG_USE_MODELSCOPE=true
+
+# CUDA configuration
+-e CUDA_VISIBLE_DEVICES=0,1,2,3
+
+# NCCL settings (for multi-GPU)
+-e NCCL_DEBUG=INFO
+-e NCCL_IB_DISABLE=0
+```
+
+### Resource Limits
+
+```bash
+# GPU allocation
+--gpus all                    # All GPUs
+--gpus device=0,1             # Specific GPUs
+--gpus '"device=0,1"'         # Alternative syntax
+
+# Memory limits
+-m 64g                        # RAM limit
+--memory-swap 64g             # Swap limit
+
+# CPU limits
+--cpus=8                      # CPU cores
+
+# Ulimits
+--ulimit memlock=-1           # Unlimited locked memory
+--ulimit stack=67108864       # 64MB stack size
+```
+
+## Health Checks
+
+Implement health checks for container orchestration:
+
+```bash
+# Basic health check
+--health-cmd="curl -f http://localhost:30000/health || exit 1" \
+--health-interval=30s \
+--health-timeout=10s \
+--health-retries=3
+
+# Generation health check
+--health-cmd="curl -f http://localhost:30000/health_generate || exit 1"
+```
+
+## Logging and Monitoring
+
+### View Logs
+
+```bash
+# Follow logs
+docker logs -f sglang
+
+# Last 100 lines
+docker logs --tail 100 sglang
+
+# Logs with timestamps
+docker logs -t sglang
+```
+
+### Container Stats
+
+```bash
+# Real-time stats
+docker stats sglang
+
+# GPU monitoring
+nvidia-smi -l 1
+```
+
+## Troubleshooting
+
+### Container Won't Start
+
+```bash
+# Check container logs
+docker logs sglang
+
+# Inspect container
+docker inspect sglang
+
+# Check GPU access
+docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi
+```
+
+### CUDA Errors
+
+```bash
+# Verify CUDA version match
+docker run --rm --gpus all lmsysorg/sglang:latest nvidia-smi
+
+# Check driver compatibility
+nvidia-smi
+```
+
+### Out of Memory
+
+```bash
+# Increase shared memory
+--shm-size=16g
+
+# Use host IPC
+--ipc host
+
+# Reduce model batch size
+command: --model-path <model> --max-running-requests 32
+```
+
+### Permission Denied
+
+```bash
+# For RDMA access
+--privileged
+
+# For InfiniBand devices
+-v /dev/infiniband:/dev/infiniband
+```
+
+## Production Best Practices
+
+### 1. Use Specific Version Tags
+
+```bash
+# Pin to specific version
+image: lmsysorg/sglang:v0.3.21
+```
+
+### 2. Implement Health Checks
+
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", "curl -f http://localhost:30000/health || exit 1"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 2m
+```
+
+### 3. Configure Resource Limits
+
+```yaml
+deploy:
+  resources:
+    limits:
+      cpus: '8'
+      memory: 64G
+      nvidia.com/gpu: 1
+    reservations:
+      cpus: '4'
+      memory: 32G
+```
+
+### 4. Enable Auto-Restart
+
+```yaml
+restart: always  # or "unless-stopped"
+```
+
+### 5. Secure Secrets
+
+```bash
+# Use Docker secrets
+docker secret create hf_token /path/to/token.txt
+
+# Reference in compose
+secrets:
+  - hf_token
+environment:
+  HF_TOKEN: /run/secrets/hf_token
+```
+
+## Next Steps
+
+- [Kubernetes Deployment](/deployment/kubernetes) - Deploy on Kubernetes
+- [Multi-Node Setup](/deployment/multi-node) - Distributed inference across nodes
+- [Cloud Platforms](/deployment/cloud-platforms) - Deploy on AWS, GCP, Azure

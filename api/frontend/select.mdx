@@ -1,0 +1,198 @@
+---
+title: "select()"
+description: "Choose from predefined options using the language model"
+---
+
+## Overview
+
+The `select()` function makes the language model choose from a predefined list of options. This is useful for classification, multiple-choice questions, and structured decision-making.
+
+## Syntax
+
+```python
+sgl.select(name, choices, temperature=0.0, choices_method=token_length_normalized)
+```
+
+## Parameters
+
+<ParamField path="name" type="str" optional>
+  Variable name to store the selected choice. Access with `state[name]`.
+</ParamField>
+
+<ParamField path="choices" type="List[str]" required>
+  List of possible choices. The model will select one of these options.
+</ParamField>
+
+<ParamField path="temperature" type="float" default="0.0">
+  Sampling temperature for selection. Usually kept at 0.0 for deterministic selection.
+</ParamField>
+
+<ParamField path="choices_method" type="ChoicesSamplingMethod" default="token_length_normalized">
+  Method for computing choice probabilities:
+  - `token_length_normalized`: Normalizes by token length (default, recommended)
+  - Other methods available in `sglang.lang.choices`
+</ParamField>
+
+## Usage
+
+### Basic Selection
+
+```python
+import sglang as sgl
+
+@sgl.function
+def classify_sentiment(s, text):
+    s += f"Classify the sentiment of: {text}\n"
+    s += "Sentiment: "
+    s += sgl.select("sentiment", choices=["positive", "negative", "neutral"])
+
+state = classify_sentiment.run(text="I love this product!")
+print(state["sentiment"])  # "positive"
+```
+
+### Multiple Choice Question
+
+```python
+@sgl.function
+def trivia_qa(s, question, options):
+    s += f"Question: {question}\n"
+    s += "Options:\n"
+    for i, opt in enumerate(options):
+        s += f"{chr(65+i)}. {opt}\n"
+    s += "Answer: "
+    s += sgl.select("answer", choices=options)
+
+state = trivia_qa.run(
+    question="What is the capital of Japan?",
+    options=["Beijing", "Seoul", "Tokyo", "Bangkok"]
+)
+print(state["answer"])  # "Tokyo"
+```
+
+### Classification with Confidence
+
+```python
+@sgl.function
+def classify_topic(s, text):
+    s += f"Text: {text}\n"
+    s += "Topic category: "
+    s += sgl.select(
+        "topic",
+        choices=["Technology", "Sports", "Politics", "Entertainment"],
+        temperature=0.0
+    )
+
+state = classify_topic.run(text="The new iPhone was announced today.")
+print(state["topic"])  # "Technology"
+```
+
+### Yes/No Questions
+
+```python
+@sgl.function
+def verify_claim(s, claim):
+    s += f"Is this claim true? {claim}\n"
+    s += "Answer: "
+    s += sgl.select("verdict", choices=["Yes", "No"])
+
+state = verify_claim.run(claim="The Earth is flat.")
+print(state["verdict"])  # "No"
+```
+
+## Using select() with gen()
+
+You can also use the `choices` parameter in `gen()` to achieve the same effect:
+
+```python
+@sgl.function
+def classify(s, text):
+    s += f"Text: {text}\nCategory: "
+    s += sgl.gen("category", choices=["spam", "ham"])
+
+# Equivalent to:
+@sgl.function
+def classify(s, text):
+    s += f"Text: {text}\nCategory: "
+    s += sgl.select("category", choices=["spam", "ham"])
+```
+
+## Choice Selection Methods
+
+The `choices_method` parameter controls how probabilities are computed:
+
+### token_length_normalized (Default)
+
+Normalizes choice probabilities by token length. This is the recommended method as it prevents bias toward longer/shorter choices.
+
+```python
+from sglang.lang.choices import token_length_normalized
+
+s += sgl.select(
+    "choice",
+    choices=["Yes", "No", "Maybe"],
+    choices_method=token_length_normalized
+)
+```
+
+## Best Practices
+
+1. **Use descriptive choices**: Make choices clear and unambiguous
+   ```python
+   # Good
+   choices=["Positive", "Negative", "Neutral"]
+   
+   # Avoid
+   choices=["P", "N", "Neu"]
+   ```
+
+2. **Keep temperature at 0.0**: For deterministic selection
+   ```python
+   sgl.select("answer", choices=options, temperature=0.0)
+   ```
+
+3. **Provide context**: Give the model enough context to make the right choice
+   ```python
+   @sgl.function
+   def classify(s, text):
+       s += "Classify the following text into one category:\n"
+       s += f"Text: {text}\n"
+       s += "Categories: Technology, Sports, Politics\n"
+       s += "Category: "
+       s += sgl.select("category", choices=["Technology", "Sports", "Politics"])
+   ```
+
+4. **Use meaningful variable names**: Name selections based on what they represent
+   ```python
+   sgl.select("user_intent", choices=["question", "command", "statement"])
+   ```
+
+## Advanced Example: Multi-step Classification
+
+```python
+@sgl.function
+def hierarchical_classify(s, text):
+    # First level classification
+    s += f"Text: {text}\n"
+    s += "Is this a question or statement? "
+    s += sgl.select("type", choices=["question", "statement"])
+    
+    s += "\n"
+    
+    # Second level classification based on first
+    if s["type"] == "question":
+        s += "What type of question? "
+        s += sgl.select("subtype", choices=["factual", "opinion", "rhetorical"])
+    else:
+        s += "What type of statement? "
+        s += sgl.select("subtype", choices=["fact", "opinion", "instruction"])
+
+state = hierarchical_classify.run(text="What is the best programming language?")
+print(f"Type: {state['type']}")        # "question"
+print(f"Subtype: {state['subtype']}")  # "opinion"
+```
+
+## See Also
+
+- [@sglang.function](/api/frontend/function) - Define prompt programs
+- [gen()](/api/frontend/gen) - Generate free-form text
+- [Choices Module](/api/choices) - Advanced choice selection methods

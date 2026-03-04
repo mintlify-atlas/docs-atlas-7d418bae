@@ -1,0 +1,492 @@
+---
+title: Generation Primitives
+description: Core primitives for text generation, selection, and multimodal inputs
+---
+
+SGLang provides a set of generation primitives that control how the LLM generates text and processes inputs. These primitives are the building blocks for creating complex prompting workflows.
+
+## Text Generation
+
+### `sgl.gen()` - Generate Text
+
+The primary primitive for generating text from the model.
+
+**Basic Usage:**
+
+```python
+import sglang as sgl
+
+@sgl.function
+def simple_gen(s):
+    s += "The capital of France is " + sgl.gen("answer", max_tokens=10)
+
+state = simple_gen.run()
+print(state["answer"])  # Access generated text
+```
+
+**Signature:**
+
+```python
+sgl.gen(
+    name: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    min_tokens: Optional[int] = None,
+    stop: Optional[Union[str, List[str]]] = None,
+    temperature: Optional[float] = None,
+    top_p: Optional[float] = None,
+    top_k: Optional[int] = None,
+    frequency_penalty: Optional[float] = None,
+    presence_penalty: Optional[float] = None,
+    regex: Optional[str] = None,
+    json_schema: Optional[str] = None,
+    choices: Optional[List[str]] = None,
+)
+```
+
+**Parameters:**
+
+- `name` (str): Variable name to store the generated text. Access via `state[name]`
+- `max_tokens` (int): Maximum number of tokens to generate
+- `min_tokens` (int): Minimum number of tokens to generate
+- `stop` (str | List[str]): Stop sequence(s) to end generation
+- `stop_token_ids` (List[int]): Token IDs that trigger stop
+- `stop_regex` (str | List[str]): Regular expression patterns to stop generation
+- `temperature` (float): Sampling temperature (0.0 = greedy, higher = more random)
+- `top_p` (float): Nucleus sampling threshold
+- `top_k` (int): Top-k sampling parameter
+- `min_p` (float): Minimum probability threshold
+- `frequency_penalty` (float): Penalty for token frequency
+- `presence_penalty` (float): Penalty for token presence
+- `ignore_eos` (bool): Ignore end-of-sequence token
+- `regex` (str): Regular expression to constrain output format
+- `json_schema` (str): JSON schema for structured output
+- `choices` (List[str]): List of choices (equivalent to `select()`)
+- `return_logprob` (bool): Return log probabilities
+- `logprob_start_len` (int): Position to start returning logprobs
+- `top_logprobs_num` (int): Number of top logprobs to return
+- `return_text_in_logprobs` (bool): Include text in logprob results
+
+**Examples:**
+
+**Stop Sequences:**
+
+```python
+@sgl.function
+def qa(s, question):
+    s += "Q: " + question + "\n"
+    s += "A: " + sgl.gen("answer", stop="\n", max_tokens=100)
+```
+
+**Multiple Stop Sequences:**
+
+```python
+s += sgl.gen("text", stop=["\n\n", "---", "END"], max_tokens=200)
+```
+
+**Temperature Control:**
+
+```python
+# Greedy (deterministic)
+s += sgl.gen("precise_answer", temperature=0.0)
+
+# Creative
+s += sgl.gen("creative_story", temperature=1.2)
+```
+
+**Minimum Tokens:**
+
+```python
+@sgl.function 
+def generate_paragraph(s, topic):
+    s += f"Write a paragraph about {topic}:\n"
+    # Ensure at least 50 tokens are generated
+    s += sgl.gen("paragraph", min_tokens=50, max_tokens=200)
+```
+
+### Typed Generation
+
+SGLang provides convenience functions for generating specific data types:
+
+**`sgl.gen_int()` - Generate Integer**
+
+```python
+@sgl.function
+def generate_number(s):
+    s += "Pick a number between 1 and 100: "
+    s += sgl.gen_int("number", max_tokens=10)
+
+state = generate_number.run()
+print(state["number"])  # Returns integer-formatted string
+```
+
+**`sgl.gen_string()` - Generate String**
+
+```python
+@sgl.function
+def generate_name(s):
+    s += 'Enter your name: '
+    s += sgl.gen_string("name", max_tokens=20)
+```
+
+## Constrained Generation
+
+### Regular Expression Constraints
+
+Use regex to enforce specific output formats:
+
+```python
+@sgl.function
+def extract_ip(s):
+    s += "Q: What is the IP address of the Google DNS servers?\n"
+    s += "A: " + sgl.gen(
+        "ip",
+        temperature=0,
+        regex=r"((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)"
+    )
+
+state = extract_ip.run()
+print(state["ip"])  # Guaranteed to be valid IP format
+```
+
+**Email Address:**
+
+```python
+s += sgl.gen(
+    "email",
+    regex=r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+)
+```
+
+**Phone Number:**
+
+```python
+s += sgl.gen(
+    "phone",
+    regex=r"\d{3}-\d{3}-\d{4}"
+)
+```
+
+### JSON Schema Constraints
+
+Generate structured JSON output:
+
+```python
+from enum import Enum
+from pydantic import BaseModel
+from sglang.srt.constrained.outlines_backend import build_regex_from_object
+
+class Weapon(str, Enum):
+    sword = "sword"
+    axe = "axe"
+    bow = "bow"
+
+class Character(BaseModel):
+    name: str
+    age: int
+    weapon: Weapon
+
+@sgl.function
+def generate_character(s):
+    s += "Generate a fantasy character in JSON format:\n"
+    s += sgl.gen(
+        "character",
+        max_tokens=128,
+        regex=build_regex_from_object(Character)
+    )
+
+state = generate_character.run()
+print(state["character"])  # Valid JSON matching the schema
+```
+
+**Complex Schema Example:**
+
+```python
+character_regex = (
+    r"\{\n"
+    + r'    "name": "[\w\d\s]{1,16}",\n'
+    + r'    "house": "(Gryffindor|Slytherin|Ravenclaw|Hufflepuff)",\n'
+    + r'    "blood status": "(Pure-blood|Half-blood|Muggle-born)",\n'
+    + r'    "wand": \{\n'
+    + r'        "wood": "[\w\d\s]{1,16}",\n'
+    + r'        "core": "[\w\d\s]{1,16}",\n'
+    + r'        "length": [0-9]{1,2}\.[0-9]{0,2}\n'
+    + r"    \},\n"
+    + r'    "alive": "(Alive|Deceased)"\n'
+    + r"\}"
+)
+
+@sgl.function
+def character_gen(s, name):
+    s += f"{name} is a character in Harry Potter. Fill in the information:\n"
+    s += sgl.gen("json_output", max_tokens=256, regex=character_regex)
+```
+
+## Choice Selection
+
+### `sgl.select()` - Choose from Options
+
+Select the most likely option from a list of choices:
+
+```python
+@sgl.function
+def tool_selection(s, question):
+    s += "To answer: " + question + "\n"
+    s += "I need to use a " + sgl.select(
+        "tool",
+        choices=["calculator", "search engine", "code interpreter"]
+    ) + "\n"
+
+state = tool_selection.run(question="What is 25 * 47?")
+print(state["tool"])  # Most likely: "calculator"
+```
+
+**Signature:**
+
+```python
+sgl.select(
+    name: Optional[str] = None,
+    choices: List[str],
+    temperature: float = 0.0,
+    choices_method: ChoicesSamplingMethod = token_length_normalized,
+)
+```
+
+**Parameters:**
+- `name` (str): Variable name for the selected choice
+- `choices` (List[str]): List of possible choices
+- `temperature` (float): Sampling temperature (usually 0.0 for deterministic selection)
+- `choices_method` (ChoicesSamplingMethod): Method for scoring choices
+
+**Using `choices` in `gen()`:**
+
+Alternatively, use the `choices` parameter in `gen()`:
+
+```python
+s += sgl.gen("tool", choices=["calculator", "search engine"])
+```
+
+**Conditional Logic with Choices:**
+
+```python
+@sgl.function
+def tool_use(s, question):
+    s += "To answer this question: " + question + ". "
+    s += "I need to use a " + sgl.gen(
+        "tool",
+        choices=["calculator", "search engine"]
+    ) + ". "
+    
+    if s["tool"] == "calculator":
+        s += "The math expression is" + sgl.gen("expression")
+    elif s["tool"] == "search engine":
+        s += "The key word to search is" + sgl.gen("word")
+```
+
+## Multimodal Primitives
+
+### `sgl.image()` - Add Image Input
+
+Add an image to the prompt for vision models:
+
+```python
+@sgl.function
+def image_qa(s, image_path, question):
+    s += sgl.user(sgl.image(image_path) + question)
+    s += sgl.assistant(sgl.gen("answer"))
+
+state = image_qa.run(
+    image_path="cat.jpeg",
+    question="What is in this image?",
+    max_new_tokens=128
+)
+print(state["answer"])
+```
+
+**Signature:**
+
+```python
+sgl.image(path: str)
+```
+
+**Parameters:**
+- `path` (str): Path to image file or base64-encoded image data
+
+**Multiple Images:**
+
+```python
+@sgl.function
+def compare_images(s, image1, image2):
+    s += sgl.user(
+        "Image 1: " + sgl.image(image1) + "\n" +
+        "Image 2: " + sgl.image(image2) + "\n" +
+        "What are the differences?"
+    )
+    s += sgl.assistant(sgl.gen("comparison"))
+```
+
+### `sgl.video()` - Add Video Input
+
+Add a video to the prompt for video-capable models:
+
+```python
+@sgl.function
+def video_qa(s, video_path, num_frames, question):
+    s += sgl.user(sgl.video(video_path, num_frames) + question)
+    s += sgl.assistant(sgl.gen("answer"))
+
+state = video_qa.run(
+    video_path="video.mp4",
+    num_frames=16,
+    question="Describe what happens in this video.",
+    max_new_tokens=512
+)
+print(state["answer"])
+```
+
+**Signature:**
+
+```python
+sgl.video(path: str, num_frames: int)
+```
+
+**Parameters:**
+- `path` (str): Path to video file
+- `num_frames` (int): Number of frames to sample from the video
+
+## Role Management Primitives
+
+For chat models, structure conversations with role primitives:
+
+### `sgl.system()` - System Message
+
+```python
+@sgl.function
+def chat(s, message):
+    s += sgl.system("You are a helpful assistant.")
+    s += sgl.user(message)
+    s += sgl.assistant(sgl.gen("response"))
+```
+
+### `sgl.user()` - User Message
+
+```python
+s += sgl.user("What is the capital of France?")
+```
+
+### `sgl.assistant()` - Assistant Message
+
+```python
+s += sgl.assistant("The capital of France is Paris.")
+# Or with generation
+s += sgl.assistant(sgl.gen("response", max_tokens=100))
+```
+
+### Role Context Managers
+
+For complex role structures, use context managers:
+
+```python
+@sgl.function
+def complex_chat(s):
+    with s.system():
+        s += "You are a helpful assistant."
+    
+    with s.user():
+        s += "Context: Important information.\n"
+        s += "Question: What do you think?"
+    
+    with s.assistant():
+        s += "Let me think...\n"
+        s += sgl.gen("response", max_tokens=256)
+```
+
+**Available Role Methods:**
+- `sgl.system()` / `s.system()`
+- `sgl.user()` / `s.user()`
+- `sgl.assistant()` / `s.assistant()`
+- `sgl.system_begin()` / `sgl.system_end()`
+- `sgl.user_begin()` / `sgl.user_end()`
+- `sgl.assistant_begin()` / `sgl.assistant_end()`
+
+## Advanced Primitives
+
+### Separate Reasoning
+
+For models that support chain-of-thought reasoning with special tokens:
+
+```python
+@sgl.function
+def reasoning_example(s, question):
+    s += sgl.user(question)
+    s += sgl.assistant(
+        sgl.separate_reasoning(
+            sgl.gen("answer", max_tokens=256),
+            model_type="deepseek"  # or other supported model
+        )
+    )
+
+# Access both reasoning and final answer
+state = reasoning_example.run(question="Solve: 2x + 5 = 13")
+print(state["answer"])           # Final answer
+print(state["answer_reasoning"]) # Reasoning process
+```
+
+## Complete Examples
+
+### Question Answering with Constraints
+
+```python
+import sglang as sgl
+
+@sgl.function
+def structured_qa(s, question):
+    s += "Question: " + question + "\n"
+    s += "Confidence (0-100): " + sgl.gen(
+        "confidence",
+        regex=r"[0-9]{1,3}",
+        max_tokens=5
+    ) + "\n"
+    s += "Answer type: " + sgl.select(
+        "type",
+        choices=["factual", "opinion", "uncertain"]
+    ) + "\n"
+    s += "Answer: " + sgl.gen("answer", max_tokens=100, stop="\n")
+
+sgl.set_default_backend(sgl.OpenAI("gpt-3.5-turbo-instruct"))
+state = structured_qa.run(question="What is the capital of France?")
+print(f"Confidence: {state['confidence']}%")
+print(f"Type: {state['type']}")
+print(f"Answer: {state['answer']}")
+```
+
+### Multimodal Analysis
+
+```python
+@sgl.function
+def analyze_image(s, image_path):
+    s += sgl.user(
+        sgl.image(image_path) +
+        "Analyze this image and provide:\n" +
+        "1. Main subject\n" +
+        "2. Colors\n" +
+        "3. Mood"
+    )
+    s += sgl.assistant(sgl.gen("analysis", max_tokens=200))
+
+runtime = sgl.Runtime(model_path="lmms-lab/llama3-llava-next-8b")
+sgl.set_default_backend(runtime)
+
+state = analyze_image.run(image_path="photo.jpg")
+print(state["analysis"])
+
+runtime.shutdown()
+```
+
+## Best Practices
+
+1. **Name your variables**: Always provide a `name` parameter to access generated content
+2. **Use stop sequences**: Prevent over-generation with appropriate stop tokens
+3. **Set max_tokens**: Always set reasonable limits to avoid runaway generation
+4. **Use constraints wisely**: Regex and JSON schemas ensure format compliance
+5. **Choose appropriate temperature**: 0.0 for factual, higher for creative tasks
+6. **Test constraints**: Verify regex patterns work as expected before production use

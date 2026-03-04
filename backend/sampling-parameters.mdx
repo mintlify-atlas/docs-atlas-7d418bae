@@ -1,0 +1,654 @@
+---
+title: Sampling Parameters
+description: Control text generation with sampling parameters
+---
+
+## Overview
+
+Sampling parameters control how the model generates text. They affect randomness, diversity, length, and structure of the output.
+
+## Quick Reference
+
+```python
+sampling_params = {
+    "max_new_tokens": 256,
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "top_k": 50,
+    "frequency_penalty": 0.0,
+    "presence_penalty": 0.0,
+    "stop": ["\n\n", "END"]
+}
+```
+
+## Token Generation
+
+### max_new_tokens
+
+<ParamField path="max_new_tokens" type="int" default="128">
+  Maximum number of tokens to generate.
+</ParamField>
+
+```python
+# Short response
+engine.generate(
+    prompt="What is AI?",
+    sampling_params={"max_new_tokens": 50}
+)
+
+# Long response
+engine.generate(
+    prompt="Write a detailed essay",
+    sampling_params={"max_new_tokens": 2048}
+)
+```
+
+### min_new_tokens
+
+<ParamField path="min_new_tokens" type="int" default="0">
+  Minimum number of tokens to generate before allowing stop sequences or EOS.
+</ParamField>
+
+```python
+# Ensure at least 100 tokens are generated
+engine.generate(
+    prompt="Explain quantum physics",
+    sampling_params={
+        "min_new_tokens": 100,
+        "max_new_tokens": 500
+    }
+)
+```
+
+### ignore_eos
+
+<ParamField path="ignore_eos" type="bool" default="false">
+  Continue generation even after EOS token is generated.
+</ParamField>
+
+```python
+# Ignore end-of-sequence token
+engine.generate(
+    prompt="Count to 100",
+    sampling_params={
+        "max_new_tokens": 1000,
+        "ignore_eos": True
+    }
+)
+```
+
+## Randomness Control
+
+### temperature
+
+<ParamField path="temperature" type="float" default="1.0">
+  Controls randomness. Lower values (0.0-0.5) make output more focused and deterministic.
+  Higher values (0.8-2.0) make output more creative and diverse.
+  
+  Setting to 0.0 enables greedy decoding (always pick most likely token).
+</ParamField>
+
+```python
+# Factual, deterministic output
+engine.generate(
+    prompt="What is the capital of France?",
+    sampling_params={"temperature": 0.0}
+)
+
+# Creative, varied output
+engine.generate(
+    prompt="Write a creative story",
+    sampling_params={"temperature": 0.9}
+)
+
+# Very random (can be incoherent)
+engine.generate(
+    prompt="Generate random text",
+    sampling_params={"temperature": 1.5}
+)
+```
+
+**Best Practices:**
+- **0.0**: Math, factual QA, code generation
+- **0.3-0.5**: General assistant, summaries
+- **0.7-0.9**: Creative writing, brainstorming
+- **1.0+**: Experimental, high diversity needed
+
+### top_p (Nucleus Sampling)
+
+<ParamField path="top_p" type="float" default="1.0">
+  Cumulative probability threshold for nucleus sampling. Only tokens with cumulative
+  probability up to `top_p` are considered. Range: (0.0, 1.0]
+  
+  Lower values (0.1-0.5) produce more focused output.
+  Higher values (0.9-1.0) allow more diversity.
+</ParamField>
+
+```python
+# Very focused
+engine.generate(
+    prompt="Summarize this article",
+    sampling_params={"top_p": 0.1, "temperature": 0.7}
+)
+
+# Balanced
+engine.generate(
+    prompt="Write a paragraph",
+    sampling_params={"top_p": 0.9, "temperature": 0.8}
+)
+
+# Maximum diversity
+engine.generate(
+    prompt="Brainstorm ideas",
+    sampling_params={"top_p": 1.0, "temperature": 1.0}
+)
+```
+
+### top_k
+
+<ParamField path="top_k" type="int" default="-1">
+  Only sample from the top K most likely tokens. Set to -1 to disable (consider all tokens).
+</ParamField>
+
+```python
+# Very constrained
+engine.generate(
+    prompt="Complete: The capital of France is",
+    sampling_params={"top_k": 5, "temperature": 0.7}
+)
+
+# More options
+engine.generate(
+    prompt="Write creatively",
+    sampling_params={"top_k": 50, "temperature": 0.8}
+)
+
+# Unconstrained (default)
+engine.generate(
+    prompt="Generate text",
+    sampling_params={"top_k": -1, "temperature": 0.8}
+)
+```
+
+### min_p
+
+<ParamField path="min_p" type="float" default="0.0">
+  Minimum probability threshold. Tokens with probability below `min_p` are filtered out.
+  Range: [0.0, 1.0]
+</ParamField>
+
+```python
+# Filter out low-probability tokens
+engine.generate(
+    prompt="Write text",
+    sampling_params={
+        "min_p": 0.05,  # Ignore tokens with p < 5%
+        "temperature": 0.8
+    }
+)
+```
+
+## Repetition Control
+
+### frequency_penalty
+
+<ParamField path="frequency_penalty" type="float" default="0.0">
+  Penalize tokens based on their frequency in the generated text. Higher values reduce repetition.
+  Range: [-2.0, 2.0]
+  
+  Positive values: Discourage repetition
+  Negative values: Encourage repetition
+</ParamField>
+
+```python
+# Reduce repetition
+engine.generate(
+    prompt="Write a diverse essay",
+    sampling_params={
+        "frequency_penalty": 0.5,
+        "max_new_tokens": 500
+    }
+)
+
+# Strong anti-repetition
+engine.generate(
+    prompt="List unique ideas",
+    sampling_params={
+        "frequency_penalty": 1.0,
+        "max_new_tokens": 200
+    }
+)
+```
+
+### presence_penalty
+
+<ParamField path="presence_penalty" type="float" default="0.0">
+  Penalize tokens that have already appeared (regardless of frequency). Range: [-2.0, 2.0]
+  
+  Positive values: Encourage new topics
+  Negative values: Stay on topic
+</ParamField>
+
+```python
+# Encourage topic diversity
+engine.generate(
+    prompt="Brainstorm topics",
+    sampling_params={
+        "presence_penalty": 0.6,
+        "max_new_tokens": 300
+    }
+)
+```
+
+### repetition_penalty
+
+<ParamField path="repetition_penalty" type="float" default="1.0">
+  Apply a penalty to tokens that have been generated. Range: [0.0, 2.0]
+  
+  Values > 1.0: Discourage repetition
+  Value = 1.0: No penalty (default)
+  Values < 1.0: Encourage repetition
+</ParamField>
+
+```python
+# Reduce repetition (alternative to frequency_penalty)
+engine.generate(
+    prompt="Write text",
+    sampling_params={
+        "repetition_penalty": 1.2,
+        "max_new_tokens": 200
+    }
+)
+```
+
+**Penalty Comparison:**
+- `frequency_penalty`: Linear scaling based on token frequency
+- `presence_penalty`: Binary (appeared or not)
+- `repetition_penalty`: Multiplicative penalty on logits
+
+## Stop Conditions
+
+### stop
+
+<ParamField path="stop" type="string | array" default="null">
+  Stop generation when any of these strings are generated.
+</ParamField>
+
+```python
+# Single stop string
+engine.generate(
+    prompt="List items:\n1.",
+    sampling_params={
+        "stop": "\n\n",
+        "max_new_tokens": 200
+    }
+)
+
+# Multiple stop strings
+engine.generate(
+    prompt="Write code",
+    sampling_params={
+        "stop": ["```", "\n\nEND", "<|endoftext|>"],
+        "max_new_tokens": 500
+    }
+)
+```
+
+### stop_token_ids
+
+<ParamField path="stop_token_ids" type="array[int]" default="null">
+  Stop generation when any of these token IDs are generated.
+</ParamField>
+
+```python
+# Stop on specific token IDs
+engine.generate(
+    prompt="Generate text",
+    sampling_params={
+        "stop_token_ids": [128001, 128009],  # Model-specific IDs
+        "max_new_tokens": 200
+    }
+)
+```
+
+### stop_regex
+
+<ParamField path="stop_regex" type="string | array" default="null">
+  Stop generation when output matches any of these regex patterns.
+</ParamField>
+
+```python
+# Stop when a number pattern appears
+engine.generate(
+    prompt="Count:",
+    sampling_params={
+        "stop_regex": r"\d{3}",  # Stop at 3-digit number
+        "max_new_tokens": 100
+    }
+)
+
+# Multiple regex patterns
+engine.generate(
+    prompt="Write text",
+    sampling_params={
+        "stop_regex": [r"\bEND\b", r"\d{4}-\d{2}-\d{2}"],
+        "max_new_tokens": 300
+    }
+)
+```
+
+### no_stop_trim
+
+<ParamField path="no_stop_trim" type="bool" default="false">
+  If true, don't remove the stop string from the output.
+</ParamField>
+
+```python
+# Include stop string in output
+engine.generate(
+    prompt="Count to 3:",
+    sampling_params={
+        "stop": "\n\n",
+        "no_stop_trim": True,
+        "max_new_tokens": 50
+    }
+)
+```
+
+## Structured Output
+
+### json_schema
+
+<ParamField path="json_schema" type="string" default="null">
+  JSON schema to constrain output. Ensures generated text is valid JSON matching the schema.
+</ParamField>
+
+```python
+import json
+
+schema = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "age": {"type": "integer", "minimum": 0},
+        "email": {"type": "string", "format": "email"},
+        "hobbies": {
+            "type": "array",
+            "items": {"type": "string"}
+        }
+    },
+    "required": ["name", "age"]
+}
+
+response = engine.generate(
+    prompt="Generate a person profile",
+    sampling_params={
+        "json_schema": json.dumps(schema),
+        "max_new_tokens": 200
+    }
+)
+
+data = json.loads(response["text"])
+print(f"Name: {data['name']}, Age: {data['age']}")
+```
+
+### regex
+
+<ParamField path="regex" type="string" default="null">
+  Regular expression pattern to constrain output format.
+</ParamField>
+
+```python
+# Phone number format
+engine.generate(
+    prompt="Generate a phone number:",
+    sampling_params={
+        "regex": r"\d{3}-\d{3}-\d{4}",
+        "max_new_tokens": 20
+    }
+)
+# Output: "555-123-4567"
+
+# Email format
+engine.generate(
+    prompt="Generate an email:",
+    sampling_params={
+        "regex": r"[a-z]+@[a-z]+\.[a-z]+",
+        "max_new_tokens": 30
+    }
+)
+# Output: "user@example.com"
+
+# Date format
+engine.generate(
+    prompt="Today's date:",
+    sampling_params={
+        "regex": r"\d{4}-\d{2}-\d{2}",
+        "max_new_tokens": 15
+    }
+)
+# Output: "2024-03-15"
+```
+
+### ebnf
+
+<ParamField path="ebnf" type="string" default="null">
+  EBNF (Extended Backus-Naur Form) grammar to constrain output.
+</ParamField>
+
+```python
+# Mathematical expression grammar
+grammar = """
+root ::= expression
+expression ::= term (["+" "-"] term)*
+term ::= factor (["*" "/"] factor)*
+factor ::= number | "(" expression ")"
+number ::= [0-9]+
+"""
+
+engine.generate(
+    prompt="Generate a math expression:",
+    sampling_params={
+        "ebnf": grammar,
+        "max_new_tokens": 50
+    }
+)
+# Output: "(5 + 3) * 2 - 7"
+
+# SQL query grammar
+sql_grammar = """
+root ::= select_stmt
+select_stmt ::= "SELECT" column_list "FROM" table_name where_clause?
+column_list ::= "*" | column_name ("," column_name)*
+where_clause ::= "WHERE" condition
+condition ::= column_name "=" value
+column_name ::= [a-zA-Z_]+
+table_name ::= [a-zA-Z_]+
+value ::= [0-9]+ | "'" [a-zA-Z ]+ "'"
+"""
+
+engine.generate(
+    prompt="Generate a SQL query:",
+    sampling_params={
+        "ebnf": sql_grammar,
+        "max_new_tokens": 100
+    }
+)
+# Output: "SELECT * FROM users WHERE id = 5"
+```
+
+## Advanced Parameters
+
+### n (Number of Completions)
+
+<ParamField path="n" type="int" default="1">
+  Generate N independent completions for each prompt.
+</ParamField>
+
+```python
+# Generate 3 different responses
+response = engine.generate(
+    prompt="Write a creative opening sentence",
+    sampling_params={
+        "n": 3,
+        "temperature": 0.9,
+        "max_new_tokens": 50
+    }
+)
+
+for i, text in enumerate(response["text"]):
+    print(f"Option {i+1}: {text}")
+```
+
+### logit_bias
+
+<ParamField path="logit_bias" type="dict" default="null">
+  Modify the likelihood of specific tokens. Keys are token IDs, values are bias adjustments.
+  Range: Typically [-100, 100]
+</ParamField>
+
+```python
+# Discourage specific tokens
+tokenizer = engine.tokenizer_manager.tokenizer
+token_id = tokenizer.encode("bad")[0]
+
+engine.generate(
+    prompt="Write a review",
+    sampling_params={
+        "logit_bias": {str(token_id): -10.0},
+        "max_new_tokens": 100
+    }
+)
+```
+
+### sampling_seed
+
+<ParamField path="sampling_seed" type="int" default="null">
+  Random seed for reproducible sampling. Set this for deterministic outputs.
+</ParamField>
+
+```python
+# Reproducible generation
+for i in range(3):
+    response = engine.generate(
+        prompt="Generate a random number",
+        sampling_params={
+            "sampling_seed": 42,
+            "temperature": 1.0,
+            "max_new_tokens": 10
+        }
+    )
+    print(response["text"])  # Same output each time
+```
+
+### skip_special_tokens
+
+<ParamField path="skip_special_tokens" type="bool" default="true">
+  Remove special tokens (BOS, EOS, PAD) from decoded output.
+</ParamField>
+
+```python
+# Include special tokens in output
+engine.generate(
+    prompt="Hello",
+    sampling_params={
+        "skip_special_tokens": False,
+        "max_new_tokens": 20
+    }
+)
+```
+
+### spaces_between_special_tokens
+
+<ParamField path="spaces_between_special_tokens" type="bool" default="true">
+  Add spaces between special tokens when decoding.
+</ParamField>
+
+## Parameter Combinations
+
+### Creative Writing
+
+```python
+sampling_params = {
+    "max_new_tokens": 500,
+    "temperature": 0.9,
+    "top_p": 0.95,
+    "frequency_penalty": 0.3,
+    "presence_penalty": 0.3
+}
+```
+
+### Code Generation
+
+```python
+sampling_params = {
+    "max_new_tokens": 512,
+    "temperature": 0.2,
+    "top_p": 0.95,
+    "stop": ["\n\n", "```"],
+    "repetition_penalty": 1.1
+}
+```
+
+### Factual Q&A
+
+```python
+sampling_params = {
+    "max_new_tokens": 150,
+    "temperature": 0.0,  # Greedy
+    "top_k": 1
+}
+```
+
+### JSON Generation
+
+```python
+sampling_params = {
+    "max_new_tokens": 300,
+    "temperature": 0.3,
+    "json_schema": json.dumps(schema)
+}
+```
+
+### Diverse Brainstorming
+
+```python
+sampling_params = {
+    "max_new_tokens": 200,
+    "temperature": 1.2,
+    "top_p": 0.98,
+    "presence_penalty": 0.8,
+    "n": 5  # Generate 5 ideas
+}
+```
+
+## Parameter Validation
+
+SGLang validates parameters and raises errors for invalid values:
+
+```python
+try:
+    engine.generate(
+        prompt="test",
+        sampling_params={"temperature": -1.0}  # Invalid
+    )
+except ValueError as e:
+    print(f"Invalid parameter: {e}")
+```
+
+**Validation Rules:**
+- `temperature >= 0.0`
+- `0.0 < top_p <= 1.0`
+- `0.0 <= min_p <= 1.0`
+- `top_k >= 1 or top_k == -1`
+- `-2.0 <= frequency_penalty <= 2.0`
+- `-2.0 <= presence_penalty <= 2.0`
+- `0.0 <= repetition_penalty <= 2.0`
+- `0 <= min_new_tokens <= max_new_tokens`
+- Only one of `json_schema`, `regex`, `ebnf` can be set
+
+## See Also
+
+- [Native API](/backend/native-api) - Using the Engine class
+- [OpenAI Compatible API](/backend/openai-compatible-api) - HTTP API examples
+- [Launch Server](/backend/launch-server) - Server configuration

@@ -1,0 +1,398 @@
+---
+title: Completions
+description: OpenAI-compatible text completions API
+---
+
+# Completions
+
+The completions endpoint generates text based on a prompt. This endpoint is compatible with OpenAI's `/v1/completions` API.
+
+## Request
+
+```bash
+curl http://localhost:30000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.1-8B-Instruct",
+    "prompt": "Once upon a time",
+    "max_tokens": 128,
+    "temperature": 0.8
+  }'
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY"
+)
+
+response = client.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    prompt="Once upon a time",
+    max_tokens=128,
+    temperature=0.8
+)
+
+print(response.choices[0].text)
+```
+
+## Parameters
+
+### Required
+
+<ParamField path="model" type="string" required>
+  Model name. Supports LoRA adapters via `base-model:adapter-name` syntax.
+</ParamField>
+
+<ParamField path="prompt" type="string | array" required>
+  The prompt(s) to generate completions for. Can be:
+  - A single string
+  - An array of strings for batch processing
+  - An array of token IDs
+  - An array of arrays of token IDs for batch processing
+</ParamField>
+
+### Sampling Parameters
+
+<ParamField path="max_tokens" type="integer" default="16">
+  Maximum number of tokens to generate.
+</ParamField>
+
+<ParamField path="temperature" type="number" default="1.0">
+  Sampling temperature between 0 and 2. Higher values make output more random.
+</ParamField>
+
+<ParamField path="top_p" type="number" default="1.0">
+  Nucleus sampling threshold. Only tokens with cumulative probability >= top_p are considered.
+</ParamField>
+
+<ParamField path="top_k" type="integer" default="-1">
+  Only sample from the top K tokens. -1 disables this.
+</ParamField>
+
+<ParamField path="min_p" type="number" default="0.0">
+  Minimum probability threshold for sampling.
+</ParamField>
+
+<ParamField path="n" type="integer" default="1">
+  Number of completions to generate for each prompt.
+</ParamField>
+
+<ParamField path="seed" type="integer">
+  Random seed for deterministic generation.
+</ParamField>
+
+<ParamField path="stop" type="string | array">
+  Stop sequences. Generation stops when these sequences are encountered.
+</ParamField>
+
+<ParamField path="stop_token_ids" type="array">
+  Stop token IDs. Generation stops when these token IDs are encountered.
+</ParamField>
+
+### Penalization
+
+<ParamField path="frequency_penalty" type="number" default="0.0">
+  Penalizes tokens based on their frequency in the generated text. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="presence_penalty" type="number" default="0.0">
+  Penalizes tokens based on whether they appear in the generated text. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="repetition_penalty" type="number" default="1.0">
+  Penalizes repeated tokens. 1.0 means no penalty.
+</ParamField>
+
+### Structured Output
+
+<ParamField path="response_format" type="object">
+  Format of the response. Options:
+  - `{"type": "text"}` - Plain text (default)
+  - `{"type": "json_object"}` - Valid JSON object
+  - `{"type": "json_schema", "json_schema": {...}}` - JSON matching a schema
+</ParamField>
+
+<ParamField path="json_schema" type="string">
+  JSON schema string for constrained generation.
+</ParamField>
+
+<ParamField path="regex" type="string">
+  Regular expression pattern for constrained generation.
+</ParamField>
+
+<ParamField path="ebnf" type="string">
+  EBNF grammar for constrained generation.
+</ParamField>
+
+### Other Parameters
+
+<ParamField path="stream" type="boolean" default="false">
+  Whether to stream the response.
+</ParamField>
+
+<ParamField path="stream_options" type="object">
+  Streaming options:
+  - `include_usage`: Include usage statistics in final chunk
+  - `continuous_usage_stats`: Include usage stats in each chunk
+</ParamField>
+
+<ParamField path="echo" type="boolean" default="false">
+  Whether to echo the prompt in the completion.
+</ParamField>
+
+<ParamField path="logprobs" type="integer">
+  Number of top log probabilities to return for each token.
+</ParamField>
+
+<ParamField path="logit_bias" type="object">
+  Bias certain tokens. Maps token IDs to bias values between -100 and 100.
+</ParamField>
+
+<ParamField path="best_of" type="integer">
+  Generate `best_of` completions and return the best one.
+</ParamField>
+
+<ParamField path="suffix" type="string">
+  Text to append after the completion.
+</ParamField>
+
+### SGLang Extensions
+
+<ParamField path="ignore_eos" type="boolean" default="false">
+  Continue generation even after EOS token.
+</ParamField>
+
+<ParamField path="skip_special_tokens" type="boolean" default="true">
+  Whether to skip special tokens in the output.
+</ParamField>
+
+<ParamField path="no_stop_trim" type="boolean" default="false">
+  Do not trim stop sequences from output.
+</ParamField>
+
+<ParamField path="stop_regex" type="string | array">
+  Regular expression(s) to use as stop conditions.
+</ParamField>
+
+<ParamField path="min_tokens" type="integer" default="0">
+  Minimum number of tokens to generate.
+</ParamField>
+
+<ParamField path="lora_path" type="string">
+  Path to LoRA adapter weights.
+</ParamField>
+
+<ParamField path="return_hidden_states" type="boolean" default="false">
+  Return hidden states from the model.
+</ParamField>
+
+<ParamField path="return_routed_experts" type="boolean" default="false">
+  Return expert routing information for MoE models.
+</ParamField>
+
+<ParamField path="return_cached_tokens_details" type="boolean" default="false">
+  Return detailed cache hit information.
+</ParamField>
+
+## Response
+
+<ResponseField name="id" type="string">
+  Unique identifier for the completion.
+</ResponseField>
+
+<ResponseField name="object" type="string">
+  Always `"text_completion"`.
+</ResponseField>
+
+<ResponseField name="created" type="integer">
+  Unix timestamp of creation time.
+</ResponseField>
+
+<ResponseField name="model" type="string">
+  Model used for generation.
+</ResponseField>
+
+<ResponseField name="choices" type="array">
+  Array of completion choices.
+
+  <ResponseField name="index" type="integer">
+    Choice index in the array.
+  </ResponseField>
+
+  <ResponseField name="text" type="string">
+    Generated text.
+  </ResponseField>
+
+  <ResponseField name="logprobs" type="object | null">
+    Log probability information if requested.
+
+    <ResponseField name="tokens" type="array">
+      List of generated tokens.
+    </ResponseField>
+
+    <ResponseField name="token_logprobs" type="array">
+      Log probabilities for each token.
+    </ResponseField>
+
+    <ResponseField name="top_logprobs" type="array">
+      Top log probabilities for each position.
+    </ResponseField>
+
+    <ResponseField name="text_offset" type="array">
+      Character offsets for each token.
+    </ResponseField>
+  </ResponseField>
+
+  <ResponseField name="finish_reason" type="string">
+    Reason for completion end:
+    - `stop`: Natural stop or stop sequence
+    - `length`: Max tokens reached
+    - `content_filter`: Content filtering
+    - `abort`: Request aborted
+  </ResponseField>
+
+  <ResponseField name="matched_stop" type="integer | string | null">
+    The stop sequence that was matched, if any.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="usage" type="object">
+  Token usage statistics.
+
+  <ResponseField name="prompt_tokens" type="integer">
+    Number of tokens in the prompt.
+  </ResponseField>
+
+  <ResponseField name="completion_tokens" type="integer">
+    Number of tokens in the completion.
+  </ResponseField>
+
+  <ResponseField name="total_tokens" type="integer">
+    Total tokens used (prompt + completion).
+  </ResponseField>
+
+  <ResponseField name="prompt_tokens_details" type="object">
+    Details about prompt tokens.
+
+    <ResponseField name="cached_tokens" type="integer">
+      Number of cached tokens from prefix cache.
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="sglext" type="object">
+  SGLang-specific extensions (only present when requested).
+
+  <ResponseField name="routed_experts" type="string">
+    Expert routing information for MoE models.
+  </ResponseField>
+
+  <ResponseField name="cached_tokens_details" type="object">
+    Detailed cache hit information.
+
+    <ResponseField name="device" type="integer">
+      Tokens from device (GPU) cache.
+    </ResponseField>
+
+    <ResponseField name="host" type="integer">
+      Tokens from host (CPU) cache.
+    </ResponseField>
+
+    <ResponseField name="storage" type="integer">
+      Tokens from L3 storage backend (if enabled).
+    </ResponseField>
+
+    <ResponseField name="storage_backend" type="string">
+      Type of storage backend used.
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+## Streaming Response
+
+When `stream=true`, the response is sent as Server-Sent Events (SSE):
+
+```json
+data: {"id":"cmpl-123","object":"text_completion","created":1234567890,"model":"meta-llama/Llama-3.1-8B-Instruct","choices":[{"index":0,"text":"Once","logprobs":null,"finish_reason":null}]}
+
+data: {"id":"cmpl-123","object":"text_completion","created":1234567890,"model":"meta-llama/Llama-3.1-8B-Instruct","choices":[{"index":0,"text":" upon","logprobs":null,"finish_reason":null}]}
+
+data: {"id":"cmpl-123","object":"text_completion","created":1234567890,"model":"meta-llama/Llama-3.1-8B-Instruct","choices":[{"index":0,"text":"","logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":20,"total_tokens":24}}
+
+data: [DONE]
+```
+
+## Examples
+
+### Basic Completion
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:30000/v1", api_key="EMPTY")
+
+response = client.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    prompt="Write a function to compute fibonacci numbers",
+    max_tokens=256,
+    temperature=0.7
+)
+
+print(response.choices[0].text)
+```
+
+### Streaming Completion
+
+```python
+stream = client.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    prompt="Tell me a story about",
+    max_tokens=512,
+    stream=True
+)
+
+for chunk in stream:
+    if chunk.choices[0].text:
+        print(chunk.choices[0].text, end="")
+```
+
+### JSON Output
+
+```python
+response = client.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    prompt="Generate a user profile:",
+    max_tokens=128,
+    response_format={"type": "json_object"}
+)
+
+import json
+profile = json.loads(response.choices[0].text)
+print(profile)
+```
+
+### Batch Processing
+
+```python
+response = client.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    prompt=[
+        "Translate to French: Hello",
+        "Translate to Spanish: Hello",
+        "Translate to German: Hello"
+    ],
+    max_tokens=10
+)
+
+for choice in response.choices:
+    print(f"Translation {choice.index}: {choice.text}")
+```
+
+## See Also
+
+- [Chat Completions](/api/http/chat-completions) - Conversational format
+- [Sampling Parameters](/api/sampling-params) - Detailed parameter guide
+- [Server Args](/api/server-args) - Server configuration

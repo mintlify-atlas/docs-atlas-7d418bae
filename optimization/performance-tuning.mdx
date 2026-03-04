@@ -1,0 +1,470 @@
+---
+title: Performance Tuning
+description: Guidelines for optimizing SGLang performance and throughput
+---
+
+This guide provides comprehensive strategies for optimizing SGLang performance across different workloads and deployment scenarios.
+
+## Achieving High Throughput for Offline Batch Inference
+
+Achieving a large batch size is the most important factor for attaining high throughput in offline batch inference. When the server is running at full load in a steady state, look for log entries like:
+
+```
+Decode batch. #running-req: 233, #token: 370959, token usage: 0.82, 
+cuda graph: True, gen throughput (token/s): 4594.01, #queue-req: 317
+```
+
+### Control Queue Size
+
+<ParamField path="#queue-req" type="metric">
+  Number of requests in the queue. A healthy range is **100-2000**.
+</ParamField>
+
+**Diagnosis:**
+- **`#queue-req: 0` frequently**: Client code is submitting requests too slowly. Increase request submission rate.
+- **`#queue-req > 2000` frequently**: Too many queued requests increase scheduling overhead. Reduce request submission rate.
+
+### Maximize Token Usage
+
+<ParamField path="token usage" type="metric">
+  KV cache memory utilization of the server. Target: **> 0.9** for good utilization.
+</ParamField>
+
+**Diagnosis:**
+- **`token usage < 0.9` and `#queue-req > 0` frequently**: Server is too conservative about taking new requests.
+  - **Solution**: Decrease `--schedule-conservativeness` to a value like `0.3`
+  - **Common cause**: Users send many requests with large `max_new_tokens` but requests stop early due to EOS or stop strings
+
+- **`token usage` very high and frequent warnings** like:
+  ```
+  KV cache pool is full. Retract requests. #retracted_reqs: 1, #new_token_ratio: 0.9998 -> 1.0000
+  ```
+  - **Solution**: Increase `--schedule-conservativeness` to a value like `1.3`
+  - **Note**: Occasional retractions (~1 time per minute) are acceptable
+
+### Tune Memory Allocation
+
+SGLang allocates memory as follows:
+
+```
+Total memory usage = model weights + KV cache pool + CUDA graph buffers + activations
+```
+
+<ParamField path="--mem-fraction-static" type="float">
+  Determines memory allocation for the first two components:
+  
+  ```
+  mem_fraction_static = (model weights + KV cache pool) / GPU memory capacity
+  ```
+</ParamField>
+
+To support higher concurrency, maximize KV cache pool capacity by setting `--mem-fraction-static` as high as possible while reserving enough memory for activations and CUDA graph buffers.
+
+**Optimization Process:**
+
+1. Check available GPU memory in logs before server is ready:
+   ```
+   max_total_num_tokens=665690, chunked_prefill_size=8192, max_prefill_tokens=16384, 
+   max_running_requests=4096, context_len=65536, available_gpu_mem=13.50 GB
+   ```
+
+2. Evaluate `available_gpu_mem`:
+   - **5-8 GB**: Good setting
+   - **10-20 GB**: Too high, increase `--mem-fraction-static` to allocate more to KV cache
+   - **< 5 GB**: Too low, risk of OOM errors, decrease `--mem-fraction-static`
+
+3. Alternative approach: Increase `--mem-fraction-static` in increments of 0.01 until you encounter OOM errors for your workloads
+
+<Tip>
+As a rule of thumb, reserving 5–8 GB of memory for activations is typically sufficient.
+</Tip>
+
+### Avoid Out-of-Memory Errors
+
+If you encounter OOM errors:
+
+<AccordionGroup>
+  <Accordion title="OOM During Prefill">
+    - Reduce `--chunked-prefill-size` to `4096` or `2048`
+    - **Tradeoff**: Saves memory but slows down prefill for long prompts
+  </Accordion>
+  
+  <Accordion title="OOM During Decoding">
+    - Lower `--max-running-requests`
+    - **Tradeoff**: Limits maximum concurrency
+  </Accordion>
+  
+  <Accordion title="General OOM">
+    - Reduce `--mem-fraction-static` to `0.8` or `0.7`
+    - **Tradeoff**: Decreases KV cache capacity, limits peak throughput
+  </Accordion>
+</AccordionGroup>
+
+### Tune CUDA Graph Coverage
+
+<ParamField path="--cuda-graph-max-bs" type="integer">
+  Maximum batch size for CUDA graph capture. Default varies by model (typically 160-256).
+</ParamField>
+
+By default, CUDA graph is enabled only for small batch sizes. However, for some models (especially at large tensor parallelism sizes), CUDA graph can be beneficial for batch sizes up to 512 or 768.
+
+**Recommendation:**
+- Increase `--cuda-graph-max-bs` to a larger value (e.g., 512, 768)
+- **Important**: CUDA graph consumes more memory, so reduce `--mem-fraction-static` at the same time
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path your-model \
+  --cuda-graph-max-bs 512 \
+  --mem-fraction-static 0.85
+```
+
+### Optimize Parallelism Strategy
+
+<ParamField path="--dp-size" type="integer">
+  Data parallelism size. Better for throughput than tensor parallelism when GPU memory allows.
+</ParamField>
+
+<ParamField path="--tp-size" type="integer">
+  Tensor parallelism size. Required for large models that don't fit on a single GPU.
+</ParamField>
+
+**Guidelines:**
+
+- **Data parallelism is better for throughput**: When there is enough GPU memory, always favor data parallelism
+- **Use SGLang Model Gateway**: For better data parallelism management rather than using `--dp-size` parameter
+- **Tensor parallelism**: Use only when model doesn't fit on a single GPU
+
+### Additional Optimizations
+
+<CardGroup cols={2}>
+  <Card title="Torch Compile" icon="fire">
+    Accelerates small models on small batch sizes.
+    
+    ```bash
+    --enable-torch-compile
+    ```
+  </Card>
+  
+  <Card title="FP8 Quantization" icon="compress">
+    Reduces memory footprint and improves throughput.
+    
+    ```bash
+    --quantization fp8
+    ```
+  </Card>
+  
+  <Card title="Expert Parallelism" icon="network-wired">
+    For MoE models, distribute experts across GPUs.
+    
+    See [Expert Parallelism blog](https://lmsys.org/blog/2025-05-05-large-scale-ep/)
+  </Card>
+  
+  <Card title="DP Attention" icon="eye">
+    For DeepSeek models with data parallelism.
+    
+    ```bash
+    --enable-dp-attention --dp-size 8
+    ```
+  </Card>
+</CardGroup>
+
+### Use Longest Prefix Match Scheduling
+
+<ParamField path="--schedule-policy" type="string" default="fcfs">
+  Scheduling policy for requests. Options: `fcfs`, `lpm`.
+</ParamField>
+
+If the workload has many shared prefixes:
+
+```bash
+--schedule-policy lpm
+```
+
+**Tradeoff:**
+- `lpm` (Longest Prefix Match) reorders requests to encourage more cache hits
+- Introduces more scheduling overhead
+- Best for workloads with high prefix reuse (e.g., many similar prompts)
+
+## Optimizing for Different Workloads
+
+### Online Serving (Low Latency)
+
+**Priorities**: Low latency, consistent response times
+
+<Steps>
+  <Step title="Reduce Batch Size">
+    Keep batch sizes small to minimize queueing delay:
+    ```bash
+    --max-running-requests 128
+    ```
+  </Step>
+  
+  <Step title="Enable CUDA Graph">
+    Maximize CUDA graph coverage for small batches:
+    ```bash
+    --cuda-graph-max-bs 256
+    ```
+  </Step>
+  
+  <Step title="Use Fast Attention Backend">
+    Choose the fastest backend for your hardware:
+    - Hopper: `--attention-backend fa3`
+    - Blackwell: `--attention-backend trtllm_mha` or `--attention-backend trtllm_mla`
+    - Ampere/Ada: `--attention-backend flashinfer`
+  </Step>
+  
+  <Step title="Conservative Scheduling">
+    Avoid retraction overhead:
+    ```bash
+    --schedule-conservativeness 1.2
+    ```
+  </Step>
+</Steps>
+
+### Offline Batch Processing (High Throughput)
+
+**Priorities**: Maximum throughput, high GPU utilization
+
+<Steps>
+  <Step title="Maximize Batch Size">
+    Increase KV cache pool and running requests:
+    ```bash
+    --mem-fraction-static 0.90 \
+    --max-running-requests 4096
+    ```
+  </Step>
+  
+  <Step title="Aggressive Scheduling">
+    Take more risks to maximize utilization:
+    ```bash
+    --schedule-conservativeness 0.3
+    ```
+  </Step>
+  
+  <Step title="Large Chunked Prefill">
+    Process long prompts efficiently:
+    ```bash
+    --chunked-prefill-size 16384
+    ```
+  </Step>
+  
+  <Step title="Data Parallelism">
+    Use data parallelism for maximum throughput:
+    ```bash
+    --dp-size 8
+    ```
+  </Step>
+</Steps>
+
+### Long-Context Workloads
+
+**Priorities**: Support long sequences, maximize prefix reuse
+
+<Steps>
+  <Step title="Enable HiCache">
+    Use hierarchical caching for long contexts:
+    ```bash
+    --enable-hierarchical-cache \
+    --hicache-ratio 2 \
+    --hicache-storage-backend hf3fs
+    ```
+  </Step>
+  
+  <Step title="Optimize Page Size">
+    Balance cache hit rate and memory efficiency:
+    ```bash
+    --page-size 64
+    ```
+  </Step>
+  
+  <Step title="Use Prefix Match Scheduling">
+    Maximize cache reuse:
+    ```bash
+    --schedule-policy lpm
+    ```
+  </Step>
+  
+  <Step title="Large Chunked Prefill">
+    Handle long prompts efficiently:
+    ```bash
+    --chunked-prefill-size 16384
+    ```
+  </Step>
+</Steps>
+
+### Multi-turn Conversations
+
+**Priorities**: Reuse conversational context, low latency for follow-ups
+
+<Steps>
+  <Step title="Enable RadixAttention">
+    Automatically enabled, ensure not disabled
+  </Step>
+  
+  <Step title="Optimize Page Size">
+    Token-level matching for maximum reuse:
+    ```bash
+    --page-size 1
+    ```
+  </Step>
+  
+  <Step title="Use HiCache with PD Disaggregation">
+    Share KV cache between prefill and decode:
+    ```bash
+    --enable-hierarchical-cache \
+    --hicache-storage-backend hf3fs \
+    --disaggregation-mode decode \
+    --disaggregation-decode-enable-offload-kvcache
+    ```
+  </Step>
+</Steps>
+
+## Monitoring and Metrics
+
+### Key Metrics to Monitor
+
+<ParamField path="gen throughput (token/s)" type="metric">
+  Generation throughput in tokens per second. Primary metric for performance.
+</ParamField>
+
+<ParamField path="token usage" type="metric">
+  KV cache memory utilization. Target: > 0.9 for good utilization.
+</ParamField>
+
+<ParamField path="#running-req" type="metric">
+  Number of requests currently being processed. Should be close to `--max-running-requests` under load.
+</ParamField>
+
+<ParamField path="#queue-req" type="metric">
+  Number of requests in the queue. Healthy range: 100-2000.
+</ParamField>
+
+<ParamField path="cuda graph" type="boolean">
+  Whether CUDA graph is active for the current batch. Should be `True` for small batches.
+</ParamField>
+
+### Enable Metrics Collection
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path your-model \
+  --enable-metrics \
+  --enable-cache-report
+```
+
+Access metrics:
+- **Prometheus endpoint**: `http://localhost:30000/metrics`
+- **Cache report**: Periodic logs showing cache hit rates
+
+## Troubleshooting Performance Issues
+
+### Low Throughput
+
+**Symptoms**: `gen throughput` significantly lower than expected
+
+<AccordionGroup>
+  <Accordion title="Check Token Usage">
+    If `token usage < 0.9`:
+    - Decrease `--schedule-conservativeness`
+    - Increase `--mem-fraction-static`
+  </Accordion>
+  
+  <Accordion title="Check Queue Size">
+    If `#queue-req: 0` frequently:
+    - Increase request submission rate
+    - Client is the bottleneck, not the server
+  </Accordion>
+  
+  <Accordion title="Check CUDA Graph">
+    If `cuda graph: False` for small batches:
+    - Increase `--cuda-graph-max-bs`
+    - Verify CUDA graph is not disabled
+  </Accordion>
+  
+  <Accordion title="Check Attention Backend">
+    - Verify using optimal backend for your hardware
+    - Try different backends and benchmark
+  </Accordion>
+</AccordionGroup>
+
+### High Latency
+
+**Symptoms**: Requests take longer than expected to complete
+
+<AccordionGroup>
+  <Accordion title="Check Batch Size">
+    If batch size is too large:
+    - Reduce `--max-running-requests`
+    - Trade throughput for lower latency
+  </Accordion>
+  
+  <Accordion title="Check Queue Size">
+    If `#queue-req` is very high:
+    - Reduce request submission rate
+    - Requests are waiting too long in queue
+  </Accordion>
+  
+  <Accordion title="Check Prefill Time">
+    If long prompts dominate:
+    - Increase `--chunked-prefill-size`
+    - Enable Piecewise CUDA Graph
+  </Accordion>
+</AccordionGroup>
+
+### Memory Issues
+
+**Symptoms**: OOM errors, frequent retractions
+
+<AccordionGroup>
+  <Accordion title="Reduce Memory Pressure">
+    - Decrease `--mem-fraction-static`
+    - Reduce `--cuda-graph-max-bs`
+    - Reduce `--chunked-prefill-size`
+  </Accordion>
+  
+  <Accordion title="Increase Memory Efficiency">
+    - Enable quantized KV cache: `--kv-cache-dtype fp8_e4m3`
+    - Use FP8 weight quantization: `--quantization fp8`
+  </Accordion>
+  
+  <Accordion title="Adjust Scheduling">
+    If frequent retractions:
+    - Increase `--schedule-conservativeness`
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices Summary
+
+<CardGroup cols={2}>
+  <Card title="Start Conservative" icon="shield">
+    Begin with default settings and tune incrementally based on metrics.
+  </Card>
+  
+  <Card title="Monitor Metrics" icon="chart-line">
+    Enable metrics and cache reporting to make data-driven tuning decisions.
+  </Card>
+  
+  <Card title="Workload-Specific Tuning" icon="sliders">
+    Optimize for your specific workload characteristics (online vs. offline, long vs. short context).
+  </Card>
+  
+  <Card title="Benchmark Regularly" icon="stopwatch">
+    Test performance after each configuration change to validate improvements.
+  </Card>
+  
+  <Card title="Balance Tradeoffs" icon="balance-scale">
+    Understand the tradeoffs between latency, throughput, and memory usage.
+  </Card>
+  
+  <Card title="Use Latest Features" icon="sparkles">
+    Leverage HiCache, PCG, and optimized attention backends for best performance.
+  </Card>
+</CardGroup>
+
+## See Also
+
+- [HiCache](/optimization/hicache)
+- [Attention Backends](/optimization/attention-backends)
+- [CUDA Graph](/optimization/cuda-graph)
+- [Quantized KV Cache](/optimization/quantized-kv-cache)

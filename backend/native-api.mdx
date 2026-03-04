@@ -1,0 +1,544 @@
+---
+title: Native API
+description: Use SGLang's native Python API for inference
+---
+
+## Overview
+
+SGLang's native Python API provides direct access to the inference engine without going through HTTP. This is ideal for embedding SGLang into your application or for maximum performance.
+
+## Installation
+
+Install SGLang:
+
+```bash
+pip install "sglang[all]"
+```
+
+## Engine Initialization
+
+### Basic Usage
+
+```python
+from sglang import Engine
+
+engine = Engine(model_path="meta-llama/Llama-3.1-8B-Instruct")
+
+response = engine.generate(
+    prompt="Hello, how are you?",
+    sampling_params={"temperature": 0.8, "max_new_tokens": 128}
+)
+
+print(response["text"])
+```
+
+### With Configuration
+
+```python
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B-Instruct",
+    tp_size=2,
+    mem_fraction_static=0.8,
+    trust_remote_code=True,
+    log_level="info"
+)
+```
+
+### Context Manager
+
+```python
+with Engine(model_path="meta-llama/Llama-3.1-8B-Instruct") as engine:
+    response = engine.generate(
+        prompt="What is machine learning?",
+        sampling_params={"max_new_tokens": 200}
+    )
+    print(response["text"])
+# Engine is automatically shut down when exiting the context
+```
+
+## Text Generation
+
+### Single Prompt
+
+```python
+response = engine.generate(
+    prompt="Explain quantum computing",
+    sampling_params={
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "max_new_tokens": 256
+    }
+)
+
+print(response["text"])
+print(f"Tokens: {response['meta_info']['prompt_tokens']} prompt, "
+      f"{response['meta_info']['completion_tokens']} completion")
+```
+
+### Batch Generation
+
+```python
+prompts = [
+    "What is the capital of France?",
+    "What is the capital of Germany?",
+    "What is the capital of Italy?"
+]
+
+response = engine.generate(
+    prompt=prompts,
+    sampling_params={"temperature": 0.8, "max_new_tokens": 50}
+)
+
+for i, text in enumerate(response["text"]):
+    print(f"Response {i}: {text}")
+```
+
+### Token IDs Input
+
+Pass pre-tokenized input:
+
+```python
+token_ids = [128000, 3923, 374, 5780, 6975, 30]  # "What is machine learning?"
+
+response = engine.generate(
+    input_ids=token_ids,
+    sampling_params={"max_new_tokens": 200}
+)
+
+print(response["text"])
+```
+
+## Streaming Generation
+
+### Synchronous Streaming
+
+```python
+for chunk in engine.generate(
+    prompt="Tell me a long story",
+    sampling_params={"temperature": 0.8, "max_new_tokens": 512},
+    stream=True
+):
+    print(chunk["text"], end="", flush=True)
+print()  # newline at the end
+```
+
+### Async Streaming
+
+```python
+import asyncio
+
+async def generate_async():
+    async for chunk in await engine.async_generate(
+        prompt="Write a poem",
+        sampling_params={"temperature": 0.9, "max_new_tokens": 256},
+        stream=True
+    ):
+        print(chunk["text"], end="", flush=True)
+    print()
+
+asyncio.run(generate_async())
+```
+
+## Sampling Parameters
+
+Control generation behavior with sampling parameters:
+
+```python
+sampling_params = {
+    # Token generation
+    "max_new_tokens": 256,
+    "min_new_tokens": 10,
+    
+    # Randomness control
+    "temperature": 0.8,
+    "top_p": 0.95,
+    "top_k": 50,
+    "min_p": 0.05,
+    
+    # Repetition control
+    "frequency_penalty": 0.5,
+    "presence_penalty": 0.5,
+    "repetition_penalty": 1.1,
+    
+    # Stop conditions
+    "stop": ["\n\n", "END"],
+    "stop_token_ids": [128001, 128009],
+    
+    # Advanced
+    "ignore_eos": False,
+    "skip_special_tokens": True,
+    "n": 1  # number of completions
+}
+
+response = engine.generate(
+    prompt="Write a function to compute fibonacci",
+    sampling_params=sampling_params
+)
+```
+
+See [Sampling Parameters](/backend/sampling-parameters) for complete documentation.
+
+## Structured Output
+
+### JSON Schema
+
+Constrain output to match a JSON schema:
+
+```python
+import json
+
+schema = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "age": {"type": "integer"},
+        "email": {"type": "string", "format": "email"}
+    },
+    "required": ["name", "age"]
+}
+
+response = engine.generate(
+    prompt="Generate information about a person named John",
+    sampling_params={
+        "max_new_tokens": 200,
+        "json_schema": json.dumps(schema)
+    }
+)
+
+data = json.loads(response["text"])
+print(f"Name: {data['name']}, Age: {data['age']}")
+```
+
+### Regex Constraints
+
+```python
+response = engine.generate(
+    prompt="Generate a phone number",
+    sampling_params={
+        "max_new_tokens": 20,
+        "regex": r"\d{3}-\d{3}-\d{4}"
+    }
+)
+
+print(response["text"])  # e.g., "555-123-4567"
+```
+
+### EBNF Grammar
+
+```python
+grammar = """
+root ::= equation
+equation ::= term (["+" "-"] term)*
+term ::= factor (["*" "/"] factor)*
+factor ::= number | "(" equation ")"
+number ::= [0-9]+
+"""
+
+response = engine.generate(
+    prompt="Generate a mathematical equation",
+    sampling_params={
+        "max_new_tokens": 50,
+        "ebnf": grammar
+    }
+)
+
+print(response["text"])  # e.g., "2 + 3 * (4 - 1)"
+```
+
+## Embeddings
+
+Generate embeddings with embedding models:
+
+```python
+engine = Engine(
+    model_path="BAAI/bge-large-en-v1.5",
+    is_embedding=True
+)
+
+response = engine.encode(
+    prompt=["Hello world", "SGLang is fast"]
+)
+
+for i, embedding in enumerate(response["embedding"]):
+    print(f"Embedding {i} dimensions: {len(embedding)}")
+```
+
+## Logprobs and Token Information
+
+Get detailed token-level information:
+
+```python
+response = engine.generate(
+    prompt="The capital of France is",
+    sampling_params={"max_new_tokens": 5},
+    return_logprob=True,
+    top_logprobs_num=3
+)
+
+# Access logprobs
+for token_logprob in response["meta_info"]["output_token_logprobs"]:
+    print(f"Token logprob: {token_logprob}")
+
+# Access top logprobs for each position
+for top_logprobs in response["meta_info"]["output_top_logprobs"]:
+    print(f"Top 3 alternatives: {top_logprobs}")
+```
+
+## Multimodal Inputs
+
+### Images
+
+```python
+engine = Engine(model_path="liuhaotian/llava-v1.5-7b")
+
+response = engine.generate(
+    prompt="Describe this image in detail",
+    image_data="https://example.com/image.jpg",  # or local path
+    sampling_params={"max_new_tokens": 200}
+)
+
+print(response["text"])
+```
+
+### Multiple Images
+
+```python
+response = engine.generate(
+    prompt="Compare these two images",
+    image_data=[
+        "image1.jpg",
+        "image2.jpg"
+    ],
+    sampling_params={"max_new_tokens": 300}
+)
+```
+
+### Video
+
+```python
+response = engine.generate(
+    prompt="Describe what happens in this video",
+    video_data="video.mp4",
+    sampling_params={"max_new_tokens": 300}
+)
+```
+
+## LoRA Adapters
+
+### Load Adapters at Startup
+
+```python
+engine = Engine(
+    model_path="meta-llama/Llama-3.1-8B",
+    enable_lora=True,
+    lora_paths=["./adapters/math", "./adapters/code"]
+)
+```
+
+### Dynamic Loading
+
+```python
+# Load a new adapter
+engine.load_lora_adapter(
+    lora_name="medical",
+    lora_path="./adapters/medical"
+)
+
+# Use the adapter
+response = engine.generate(
+    prompt="Explain diabetes",
+    lora_path="medical",
+    sampling_params={"max_new_tokens": 200}
+)
+
+# Unload when done
+engine.unload_lora_adapter("medical")
+```
+
+## Sessions
+
+Sessions allow efficient multi-turn conversations with shared context:
+
+```python
+# Open a session
+session_id = engine.open_session(
+    capacity_of_str_len=4096
+)
+
+# First turn
+response1 = engine.generate(
+    prompt="My name is Alice.",
+    session_params={"session_id": session_id}
+)
+
+# Second turn - context is preserved
+response2 = engine.generate(
+    prompt="What is my name?",
+    session_params={"session_id": session_id}
+)
+
+print(response2["text"])  # Should mention "Alice"
+
+# Close the session
+engine.close_session(session_id)
+```
+
+## Cache Management
+
+### Flush Cache
+
+Clear the KV cache:
+
+```python
+engine.flush_cache()
+```
+
+### Freeze Garbage Collection
+
+Improve performance by freezing GC after warmup:
+
+```python
+# Warm up the engine
+for _ in range(10):
+    engine.generate(prompt="warmup", sampling_params={"max_new_tokens": 10})
+
+# Freeze GC
+engine.freeze_gc()
+
+# Continue with normal operation
+```
+
+## Advanced Features
+
+### Custom Logit Processor
+
+```python
+response = engine.generate(
+    prompt="Generate a number",
+    custom_logit_processor="my_processor_function",
+    sampling_params={"max_new_tokens": 10}
+)
+```
+
+### Hidden States
+
+Access model hidden states:
+
+```python
+response = engine.generate(
+    prompt="Hello",
+    return_hidden_states=True,
+    sampling_params={"max_new_tokens": 5}
+)
+
+hidden_states = response["meta_info"]["hidden_states"]
+```
+
+### Priority Scheduling
+
+Set request priority (requires `--enable-priority-scheduling`):
+
+```python
+response = engine.generate(
+    prompt="High priority request",
+    priority=10,  # Higher values = higher priority
+    sampling_params={"max_new_tokens": 50}
+)
+```
+
+## Profiling and Monitoring
+
+### Start Profiling
+
+```python
+engine.start_profile(
+    profile_name="my_profile",
+    profile_dir="./profiles"
+)
+
+# Run some requests
+for i in range(100):
+    engine.generate(prompt=f"Request {i}", sampling_params={"max_new_tokens": 50})
+
+engine.stop_profile()
+```
+
+### Get Server Info
+
+```python
+info = engine.get_server_info()
+print(f"Model: {info['model_path']}")
+print(f"TP size: {info['tp_size']}")
+print(f"Max tokens: {info['max_total_tokens']}")
+```
+
+## Engine Configuration
+
+All server arguments are available when creating an Engine:
+
+```python
+engine = Engine(
+    # Model
+    model_path="meta-llama/Llama-3.1-70B-Instruct",
+    tokenizer_path=None,  # defaults to model_path
+    trust_remote_code=True,
+    
+    # Parallelism
+    tp_size=4,
+    dp_size=1,
+    pp_size=1,
+    
+    # Memory
+    mem_fraction_static=0.85,
+    max_total_tokens=8192,
+    chunked_prefill_size=8192,
+    
+    # Performance
+    cuda_graph_max_bs=256,
+    disable_radix_cache=False,
+    
+    # Quantization
+    quantization="awq",
+    kv_cache_dtype="fp8_e4m3",
+    
+    # Logging
+    log_level="info",
+    log_requests=False
+)
+```
+
+See [Server Arguments](/backend/server-arguments) for a complete list.
+
+## Error Handling
+
+```python
+try:
+    response = engine.generate(
+        prompt="test",
+        sampling_params={"temperature": -1.0}  # Invalid
+    )
+except ValueError as e:
+    print(f"Invalid parameter: {e}")
+except Exception as e:
+    print(f"Error: {e}")
+```
+
+## Cleanup
+
+Always shut down the engine when done:
+
+```python
+engine.shutdown()
+
+# Or use context manager (recommended)
+with Engine(model_path="model") as engine:
+    # Use engine
+    pass
+# Automatically cleaned up
+```
+
+## See Also
+
+- [Offline Engine](/backend/offline-engine) - Engine without server components
+- [Sampling Parameters](/backend/sampling-parameters) - Parameter reference
+- [Server Arguments](/backend/server-arguments) - Configuration options

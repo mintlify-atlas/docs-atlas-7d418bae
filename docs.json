@@ -1,122 +1,209 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "SGLang",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#b14421",
+    "light": "#e4ab96",
+    "dark": "#8b3419"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "https://media.brand.dev/7ff7f67f-ea23-4ff6-96c8-c232d356e4ef.png",
+  "logo": {
+    "light": "https://media.brand.dev/2721aabb-ac69-408e-8675-3c49ed499d8a.png",
+    "dark": "https://media.brand.dev/2721aabb-ac69-408e-8675-3c49ed499d8a.png"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/sgl-project/sglang"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/sgl-project/sglang"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/architecture",
+              "concepts/radix-attention",
+              "concepts/prefix-caching",
+              "concepts/continuous-batching"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Backend (Runtime)",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "backend/launch-server",
+              "backend/openai-compatible-api",
+              "backend/native-api",
+              "backend/offline-engine",
+              "backend/sampling-parameters",
+              "backend/server-arguments"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Frontend (Language)",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "frontend/overview",
+              "frontend/sglang-functions",
+              "frontend/generation-primitives",
+              "frontend/backends"
+            ]
+          },
+          {
+            "group": "Model Support",
+            "pages": [
+              "models/supported-models",
+              "models/llama",
+              "models/qwen",
+              "models/deepseek",
+              "models/multimodal"
+            ]
+          },
+          {
+            "group": "Advanced Features",
+            "pages": [
+              "advanced/structured-outputs",
+              "advanced/lora",
+              "advanced/quantization",
+              "advanced/speculative-decoding",
+              "advanced/separate-reasoning",
+              "advanced/tool-calling"
+            ]
+          },
+          {
+            "group": "Distributed Serving",
+            "pages": [
+              "distributed/tensor-parallelism",
+              "distributed/pipeline-parallelism",
+              "distributed/expert-parallelism",
+              "distributed/data-parallelism",
+              "distributed/prefill-decode-disaggregation"
+            ]
+          },
+          {
+            "group": "Optimization",
+            "pages": [
+              "optimization/hicache",
+              "optimization/attention-backends",
+              "optimization/cuda-graph",
+              "optimization/quantized-kv-cache",
+              "optimization/performance-tuning"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/kubernetes",
+              "deployment/cloud-platforms",
+              "deployment/multi-node"
+            ]
+          },
+          {
+            "group": "Observability",
+            "pages": [
+              "observability/monitoring",
+              "observability/metrics",
+              "observability/tracing",
+              "observability/benchmarking"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Python API",
             "pages": [
-              "api-reference/introduction"
+              "api/engine",
+              "api/runtime",
+              "api/server-args",
+              "api/sampling-params"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Frontend API",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/frontend/function",
+              "api/frontend/gen",
+              "api/frontend/select",
+              "api/frontend/roles"
+            ]
+          },
+          {
+            "group": "HTTP API",
+            "pages": [
+              "api/http/completions",
+              "api/http/chat-completions",
+              "api/http/embeddings",
+              "api/http/models"
+            ]
+          },
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "api/cli/serve",
+              "api/cli/generate",
+              "api/cli/version"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Developer Guide",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "developer/contribution-guide",
+              "developer/development-setup",
+              "developer/adding-models",
+              "developer/testing"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "developer/architecture-overview",
+              "developer/scheduler",
+              "developer/memory-management",
+              "developer/kernel-development"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Resources",
+        "groups": [
+          {
+            "group": "Additional Resources",
+            "pages": [
+              "resources/faq",
+              "resources/environment-variables",
+              "resources/troubleshooting",
+              "resources/migration-guide",
+              "resources/learn-more"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

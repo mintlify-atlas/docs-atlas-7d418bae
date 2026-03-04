@@ -1,0 +1,416 @@
+---
+title: OpenAI Compatible API
+description: OpenAI-compatible HTTP API endpoints for chat, completions, and embeddings
+---
+
+## Overview
+
+SGLang provides OpenAI-compatible API endpoints, making it easy to switch from OpenAI to self-hosted models without changing your code.
+
+## Base URL
+
+All API endpoints are available at:
+
+```
+http://localhost:30000
+```
+
+Change the host and port using `--host` and `--port` flags when launching the server.
+
+## Authentication
+
+Optionally enable API key authentication:
+
+```bash
+sglang serve \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --api-key your-secret-key
+```
+
+Include the API key in requests:
+
+```bash
+curl http://localhost:30000/v1/chat/completions \
+  -H "Authorization: Bearer your-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "meta-llama/Llama-3.1-8B-Instruct", "messages": [{"role": "user", "content": "Hello!"}]}'
+```
+
+## Chat Completions
+
+### Endpoint
+
+```
+POST /v1/chat/completions
+```
+
+### Basic Example
+
+```python
+import openai
+
+client = openai.Client(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY"  # or your API key if authentication is enabled
+)
+
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the capital of France?"}
+    ],
+    temperature=0.8,
+    max_tokens=128
+)
+
+print(response.choices[0].message.content)
+```
+
+### Streaming Example
+
+```python
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Tell me a story"}],
+    stream=True,
+    temperature=0.8
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+### Request Parameters
+
+<ParamField path="model" type="string" required>
+  Model identifier. Use the model path or served model name.
+</ParamField>
+
+<ParamField path="messages" type="array" required>
+  Array of message objects with `role` and `content` fields.
+  
+  Roles: `system`, `user`, `assistant`, `tool`
+</ParamField>
+
+<ParamField path="temperature" type="float" default="1.0">
+  Sampling temperature between 0 and 2. Higher values make output more random.
+</ParamField>
+
+<ParamField path="max_tokens" type="int" default="16">
+  Maximum number of tokens to generate.
+</ParamField>
+
+<ParamField path="top_p" type="float" default="1.0">
+  Nucleus sampling threshold. Only tokens with cumulative probability up to `top_p` are considered.
+</ParamField>
+
+<ParamField path="top_k" type="int" default="-1">
+  Top-k sampling. Only the top `top_k` tokens are considered. Set to -1 to disable.
+</ParamField>
+
+<ParamField path="frequency_penalty" type="float" default="0.0">
+  Penalty for token frequency. Range: -2.0 to 2.0.
+</ParamField>
+
+<ParamField path="presence_penalty" type="float" default="0.0">
+  Penalty for token presence. Range: -2.0 to 2.0.
+</ParamField>
+
+<ParamField path="n" type="int" default="1">
+  Number of completions to generate for each prompt.
+</ParamField>
+
+<ParamField path="stop" type="string | array" default="null">
+  Stop sequences. Generation stops when these strings are encountered.
+</ParamField>
+
+<ParamField path="stream" type="bool" default="false">
+  Enable streaming responses via Server-Sent Events.
+</ParamField>
+
+<ParamField path="logprobs" type="bool" default="false">
+  Return log probabilities of output tokens.
+</ParamField>
+
+<ParamField path="top_logprobs" type="int" default="0">
+  Number of top log probabilities to return for each token.
+</ParamField>
+
+### Response Format
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "object": "chat.completion",
+  "created": 1699000000,
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "The capital of France is Paris."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 20,
+    "completion_tokens": 10,
+    "total_tokens": 30
+  }
+}
+```
+
+### SGLang-Specific Extensions
+
+#### JSON Schema Constraints
+
+Generate structured JSON output:
+
+```python
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Generate user info"}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "user_info",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                    "email": {"type": "string"}
+                },
+                "required": ["name", "age"]
+            }
+        }
+    }
+)
+```
+
+#### Regex Constraints
+
+```python
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Generate a phone number"}],
+    extra_body={"regex": r"\d{3}-\d{3}-\d{4}"}
+)
+```
+
+#### Cache Reporting
+
+Enable cache hit reporting (requires `--enable-cache-report` flag):
+
+```python
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_body={"return_cached_tokens_details": True}
+)
+
+# Check cache statistics
+if response.usage.prompt_tokens_details:
+    print(f"Cached tokens: {response.usage.prompt_tokens_details.cached_tokens}")
+```
+
+## Text Completions
+
+### Endpoint
+
+```
+POST /v1/completions
+```
+
+### Example
+
+```python
+response = client.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    prompt="Once upon a time",
+    max_tokens=100,
+    temperature=0.8
+)
+
+print(response.choices[0].text)
+```
+
+### Request Parameters
+
+<ParamField path="model" type="string" required>
+  Model identifier.
+</ParamField>
+
+<ParamField path="prompt" type="string | array" required>
+  Text prompt(s) or token IDs to generate completions for.
+</ParamField>
+
+<ParamField path="max_tokens" type="int" default="16">
+  Maximum number of tokens to generate.
+</ParamField>
+
+<ParamField path="temperature" type="float" default="1.0">
+  Sampling temperature.
+</ParamField>
+
+<ParamField path="top_p" type="float" default="1.0">
+  Nucleus sampling parameter.
+</ParamField>
+
+<ParamField path="n" type="int" default="1">
+  Number of completions to generate.
+</ParamField>
+
+<ParamField path="echo" type="bool" default="false">
+  Echo the prompt in addition to the completion.
+</ParamField>
+
+<ParamField path="stream" type="bool" default="false">
+  Enable streaming responses.
+</ParamField>
+
+## Embeddings
+
+### Endpoint
+
+```
+POST /v1/embeddings
+```
+
+### Example
+
+```python
+response = client.embeddings.create(
+    model="BAAI/bge-large-en-v1.5",
+    input=["Hello, world!", "SGLang is fast"]
+)
+
+for embedding in response.data:
+    print(f"Embedding {embedding.index}: {len(embedding.embedding)} dimensions")
+```
+
+### Request Parameters
+
+<ParamField path="model" type="string" required>
+  Embedding model identifier.
+</ParamField>
+
+<ParamField path="input" type="string | array" required>
+  Text or array of texts to generate embeddings for.
+</ParamField>
+
+<ParamField path="dimensions" type="int" default="null">
+  Output embedding dimensions (if model supports dimension reduction).
+</ParamField>
+
+## Model Information
+
+### List Models
+
+```
+GET /v1/models
+```
+
+```python
+models = client.models.list()
+for model in models.data:
+    print(model.id)
+```
+
+### Get Model Details
+
+```
+GET /v1/models/{model_id}
+```
+
+```python
+model = client.models.retrieve("meta-llama/Llama-3.1-8B-Instruct")
+print(f"Max context: {model.max_model_len}")
+```
+
+## Health and Status
+
+### Health Check
+
+```
+GET /health
+```
+
+```bash
+curl http://localhost:30000/health
+```
+
+Returns `200 OK` if the server is healthy.
+
+### Server Information
+
+```
+GET /get_model_info
+```
+
+```bash
+curl http://localhost:30000/get_model_info
+```
+
+Returns detailed server and model configuration.
+
+## Error Handling
+
+API errors return standard HTTP status codes:
+
+- `400 Bad Request` - Invalid request parameters
+- `401 Unauthorized` - Missing or invalid API key
+- `404 Not Found` - Model or endpoint not found
+- `500 Internal Server Error` - Server error
+- `503 Service Unavailable` - Server is overloaded
+
+Error response format:
+
+```json
+{
+  "object": "error",
+  "message": "Invalid request: temperature must be non-negative",
+  "type": "invalid_request_error",
+  "code": 400
+}
+```
+
+## Rate Limiting
+
+Configure request limits:
+
+<ParamField path="max-running-requests" type="int" default="null">
+  Maximum number of requests being processed concurrently.
+</ParamField>
+
+<ParamField path="max-queued-requests" type="int" default="null">
+  Maximum number of requests allowed in the queue.
+</ParamField>
+
+## LoRA Adapters
+
+SGLang supports dynamic LoRA adapter selection per request:
+
+```python
+response = client.chat.completions.create(
+    model="base-model:adapter-name",  # Specify adapter with colon syntax
+    messages=[{"role": "user", "content": "Hello"}]
+)
+
+# Or use lora_path parameter
+response = client.chat.completions.create(
+    model="base-model",
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_body={"lora_path": "/path/to/adapter"}
+)
+```
+
+## See Also
+
+- [Native API](/backend/native-api) - SGLang's native Python API
+- [Sampling Parameters](/backend/sampling-parameters) - Detailed parameter reference
+- [Server Arguments](/backend/server-arguments) - Server configuration options

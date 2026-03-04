@@ -1,0 +1,303 @@
+---
+title: "Tensor Parallelism"
+description: "Split model layers across multiple GPUs for efficient inference"
+---
+
+## Overview
+
+Tensor Parallelism (TP) is the most common parallelism strategy for LLM inference, where model weights are distributed across multiple GPUs within a single node. Each GPU holds a portion of each layer's parameters, enabling models to scale beyond a single GPU's memory capacity.
+
+### How It Works
+
+In tensor parallelism:
+- **Model weights are sharded** across multiple GPUs
+- Each GPU computes a portion of each layer's output
+- **All-reduce operations** synchronize results across GPUs
+- All GPUs process the same batch of requests
+
+### Key Characteristics
+
+- Best suited for **intra-node scaling** (GPUs connected via NVLink/PCIe)
+- Requires high-bandwidth communication for all-reduce operations
+- Works well for models with standard attention mechanisms (GQA, MHA)
+- Memory efficient: Each GPU stores only a portion of model weights
+
+## When to Use Tensor Parallelism
+
+**Use TP when:**
+- Model doesn't fit on a single GPU
+- You have multiple GPUs in a single node with fast interconnects
+- Working with standard attention models (Llama, Qwen, Mistral, etc.)
+- You need low latency for small batch sizes
+
+**Consider alternatives when:**
+- Using MLA-based models (DeepSeek, MiniMax) → Use [Data Parallelism Attention](/distributed/data-parallelism)
+- Scaling across multiple nodes → Use [Pipeline Parallelism](/distributed/pipeline-parallelism)
+- Working with MoE models → Combine with [Expert Parallelism](/distributed/expert-parallelism)
+
+## Configuration
+
+### Basic Setup
+
+Enable tensor parallelism with the `--tp` flag:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4
+```
+
+This distributes the model across 4 GPUs on a single node.
+
+### Multi-Node Tensor Parallelism
+
+To run TP across multiple nodes:
+
+```bash
+# Node 0 (Master)
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 8 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --dist-init-addr <MASTER_NODE_IP>:29500
+
+# Node 1
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 8 \
+  --nnodes 2 \
+  --node-rank 1 \
+  --dist-init-addr <MASTER_NODE_IP>:29500
+```
+
+**Important:** Multi-node TP requires fast interconnects (InfiniBand, RoCE). If you experience deadlocks, add `--disable-cuda-graph`.
+
+### Peer-to-Peer Access
+
+If you encounter the error "peer access is not supported between these two devices", enable P2P checking:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --enable-p2p-check
+```
+
+## Combining with Other Parallelism
+
+### TP + Data Parallelism
+
+Combine TP with DP for models that fit across multiple GPUs but need higher throughput:
+
+```bash
+python -m sglang_router.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --dp-size 2
+```
+
+This creates 2 replicas, each using 4-way TP (8 GPUs total).
+
+### TP + Expert Parallelism (MoE Models)
+
+For Mixture-of-Experts models, combine TP with EP:
+
+```bash
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 \
+  --ep 8 \
+  --moe-a2a-backend deepep
+```
+
+See [Expert Parallelism](/distributed/expert-parallelism) for details.
+
+### TP + Pipeline Parallelism
+
+For very large models with long contexts:
+
+```bash
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3.1 \
+  --tp 8 \
+  --pp-size 4 \
+  --chunked-prefill-size 4096
+```
+
+See [Pipeline Parallelism](/distributed/pipeline-parallelism) for details.
+
+## Communication Backends
+
+SGLang supports multiple communication backends for all-reduce operations:
+
+### Custom All-Reduce (Default)
+
+Optimized all-reduce implementation for NVIDIA GPUs:
+- Automatically enabled for supported architectures
+- Falls back to NCCL for unsupported tensor sizes
+- Disable with `--disable-custom-all-reduce`
+
+### PyNccl
+
+Low-level NCCL wrapper for optimized GPU communication:
+- Used for CUDA graph mode
+- Supports symmetric memory allocation
+
+### Hardware-Specific Backends
+
+**AMD (ROCm):**
+```bash
+# QuickAllReduce for MI300+ GPUs
+export SGLANG_USE_1STAGE_ALLREDUCE=0  # 2-stage for large tensors
+python -m sglang.launch_server --model-path ... --tp 8
+```
+
+**Intel (XPU):**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --device xpu
+```
+
+**Huawei Ascend (NPU):**
+```bash
+export HCCL_BUFFSIZE=256  # Set HCCL buffer size (MB)
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 8
+```
+
+## Performance Tuning
+
+### Memory Management
+
+Control KV cache memory allocation:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --mem-fraction-static 0.85  # Use 85% of GPU memory for KV cache
+```
+
+Reduce `--mem-fraction-static` if you encounter OOM errors.
+
+### Attention Backend
+
+Select the optimal attention implementation:
+
+```bash
+# FlashAttention-3 (recommended for H100/H200)
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --attention-backend fa3
+
+# FlashInfer (recommended for A100/A10)
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --attention-backend flashinfer
+```
+
+### Deterministic All-Reduce
+
+For reproducible results (AMD GPUs):
+
+```bash
+export SGLANG_USE_1STAGE_ALLREDUCE=1
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 8 \
+  --enable-deterministic-inference
+```
+
+## Troubleshooting
+
+### Deadlock During Initialization
+
+**Symptom:** Server hangs during model loading with multi-node TP
+
+**Solution:**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 8 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --dist-init-addr <MASTER_NODE_IP>:29500 \
+  --disable-cuda-graph
+```
+
+### P2P Access Errors
+
+**Symptom:** "peer access is not supported between these two devices"
+
+**Solution:**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --enable-p2p-check
+```
+
+### OOM Errors
+
+**Symptom:** Out of memory during serving
+
+**Solution:**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --mem-fraction-static 0.7  # Reduce KV cache size
+```
+
+For long prompts, enable chunked prefill:
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --chunked-prefill-size 4096
+```
+
+### Communication Overhead
+
+**Symptom:** Poor throughput with multi-node TP
+
+**Solution:** Consider Pipeline Parallelism for cross-node deployments:
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --pp-size 2 \
+  --chunked-prefill-size 4096
+```
+
+## Configuration Summary
+
+| Parameter | Description | Default | Recommended Values |
+|-----------|-------------|---------|--------------------|
+| `--tp` | Tensor parallel size | `1` | Power of 2 (2, 4, 8) |
+| `--nnodes` | Number of nodes | `1` | 1-4 for TP |
+| `--dist-init-addr` | Master node address | `None` | `<IP>:29500` |
+| `--mem-fraction-static` | KV cache memory fraction | `0.9` | 0.7-0.9 |
+| `--enable-p2p-check` | Check GPU P2P support | `False` | Enable if needed |
+| `--disable-cuda-graph` | Disable CUDA graphs | `False` | Enable for debugging |
+
+## Best Practices
+
+1. **Start with single-node TP** before scaling to multiple nodes
+2. **Use power-of-2 TP sizes** (2, 4, 8) for optimal performance
+3. **Monitor GPU utilization** to ensure balanced workloads
+4. **Test P2P connectivity** before production deployments
+5. **Consider alternatives** for MLA models and MoE architectures
+
+## Related Documentation
+
+- [Data Parallelism](/distributed/data-parallelism) - For higher throughput with replicas
+- [Expert Parallelism](/distributed/expert-parallelism) - For MoE models
+- [Pipeline Parallelism](/distributed/pipeline-parallelism) - For multi-node scaling
+- [Server Arguments](https://docs.sglang.io/advanced_features/server_arguments.html) - Complete argument reference

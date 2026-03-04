@@ -1,0 +1,333 @@
+---
+title: Embeddings
+description: OpenAI-compatible embeddings API
+---
+
+# Embeddings
+
+The embeddings endpoint generates vector representations of input text. This endpoint is compatible with OpenAI's `/v1/embeddings` API.
+
+## Request
+
+```bash
+curl http://localhost:30000/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "BAAI/bge-large-en-v1.5",
+    "input": "The quick brown fox jumps over the lazy dog"
+  }'
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY"
+)
+
+response = client.embeddings.create(
+    model="BAAI/bge-large-en-v1.5",
+    input="The quick brown fox jumps over the lazy dog"
+)
+
+print(response.data[0].embedding)
+print(f"Embedding dimension: {len(response.data[0].embedding)}")
+```
+
+## Parameters
+
+### Required
+
+<ParamField path="input" type="string | array" required>
+  Input text to generate embeddings for. Can be:
+  - A single string
+  - An array of strings for batch processing
+  - An array of token IDs (integers)
+  - An array of arrays of token IDs
+  - An array of multimodal embedding inputs (for multimodal models)
+</ParamField>
+
+<ParamField path="model" type="string" default="default">
+  Model name to use for embeddings.
+</ParamField>
+
+### Optional
+
+<ParamField path="encoding_format" type="string" default="float">
+  Format of the embeddings. Currently only `"float"` is supported.
+</ParamField>
+
+<ParamField path="dimensions" type="integer">
+  Number of dimensions for the output embeddings. If specified, the model will reduce the embedding dimensionality.
+</ParamField>
+
+<ParamField path="user" type="string">
+  Unique identifier for the end-user.
+</ParamField>
+
+### SGLang Extensions
+
+<ParamField path="lora_path" type="string">
+  Path to LoRA adapter weights to apply to the model.
+</ParamField>
+
+<ParamField path="rid" type="string">
+  Request ID for tracking.
+</ParamField>
+
+<ParamField path="priority" type="integer">
+  Priority level for the request.
+</ParamField>
+
+## Multimodal Embeddings
+
+For multimodal embedding models, you can provide text, images, and videos:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:30000/v1", api_key="EMPTY")
+
+response = client.embeddings.create(
+    model="multimodal-embedding-model",
+    input=[
+        {"text": "A beautiful sunset"},
+        {"image": "https://example.com/image.jpg"},
+        {"text": "Mountain landscape", "image": "data:image/jpeg;base64,..."}
+    ]
+)
+
+for i, embedding_obj in enumerate(response.data):
+    print(f"Embedding {i} dimension: {len(embedding_obj.embedding)}")
+```
+
+### Multimodal Input Format
+
+<ParamField path="text" type="string">
+  Text content for the embedding.
+</ParamField>
+
+<ParamField path="image" type="string">
+  Image URL, file path, or base64-encoded image.
+</ParamField>
+
+<ParamField path="video" type="string">
+  Video URL, file path, or base64-encoded video.
+</ParamField>
+
+## Response
+
+<ResponseField name="object" type="string">
+  Always `"list"`.
+</ResponseField>
+
+<ResponseField name="data" type="array">
+  Array of embedding objects.
+
+  <ResponseField name="object" type="string">
+    Always `"embedding"`.
+  </ResponseField>
+
+  <ResponseField name="embedding" type="array">
+    Array of floating-point numbers representing the embedding vector.
+  </ResponseField>
+
+  <ResponseField name="index" type="integer">
+    Index of the embedding in the input array.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="model" type="string">
+  Model used to generate embeddings.
+</ResponseField>
+
+<ResponseField name="usage" type="object">
+  Token usage information.
+
+  <ResponseField name="prompt_tokens" type="integer">
+    Number of tokens in the input.
+  </ResponseField>
+
+  <ResponseField name="total_tokens" type="integer">
+    Total tokens processed.
+  </ResponseField>
+</ResponseField>
+
+## Examples
+
+### Single Text Embedding
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:30000/v1", api_key="EMPTY")
+
+response = client.embeddings.create(
+    model="BAAI/bge-large-en-v1.5",
+    input="Machine learning is fascinating"
+)
+
+embedding = response.data[0].embedding
+print(f"Embedding length: {len(embedding)}")
+print(f"First 5 values: {embedding[:5]}")
+```
+
+### Batch Embeddings
+
+```python
+texts = [
+    "Artificial intelligence",
+    "Machine learning",
+    "Deep learning",
+    "Neural networks"
+]
+
+response = client.embeddings.create(
+    model="BAAI/bge-large-en-v1.5",
+    input=texts
+)
+
+for i, data in enumerate(response.data):
+    print(f"Text {i}: {texts[i]}")
+    print(f"Embedding dim: {len(data.embedding)}")
+    print()
+```
+
+### Semantic Similarity
+
+```python
+import numpy as np
+
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+# Get embeddings for multiple texts
+response = client.embeddings.create(
+    model="BAAI/bge-large-en-v1.5",
+    input=[
+        "The cat sat on the mat",
+        "A feline rested on the rug",
+        "The weather is nice today"
+    ]
+)
+
+emb1 = np.array(response.data[0].embedding)
+emb2 = np.array(response.data[1].embedding)
+emb3 = np.array(response.data[2].embedding)
+
+print(f"Similarity (cat/feline): {cosine_similarity(emb1, emb2):.4f}")
+print(f"Similarity (cat/weather): {cosine_similarity(emb1, emb3):.4f}")
+```
+
+### With LoRA Adapter
+
+```python
+response = client.embeddings.create(
+    model="BAAI/bge-large-en-v1.5:my-lora-adapter",
+    input="Specialized domain text",
+    lora_path="/path/to/lora/adapter"
+)
+
+embedding = response.data[0].embedding
+```
+
+## Supported Models
+
+SGLang supports various embedding models including:
+
+- **Text Embeddings**:
+  - `BAAI/bge-large-en-v1.5`
+  - `BAAI/bge-base-en-v1.5`
+  - `intfloat/e5-mistral-7b-instruct`
+  - `sentence-transformers/all-MiniLM-L6-v2`
+
+- **Multimodal Embeddings**:
+  - Models supporting text + image embeddings
+  - Models supporting text + video embeddings
+
+## Response Format
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "embedding": [0.0234, -0.0187, 0.0456, ...],
+      "index": 0
+    }
+  ],
+  "model": "BAAI/bge-large-en-v1.5",
+  "usage": {
+    "prompt_tokens": 8,
+    "total_tokens": 8
+  }
+}
+```
+
+## Use Cases
+
+### Retrieval-Augmented Generation (RAG)
+
+Embeddings are commonly used in RAG systems to find relevant documents:
+
+```python
+# Index your documents
+documents = [
+    "SGLang is a fast serving framework for LLMs.",
+    "It provides high throughput and low latency.",
+    "SGLang supports various models and features."
+]
+
+response = client.embeddings.create(
+    model="BAAI/bge-large-en-v1.5",
+    input=documents
+)
+
+doc_embeddings = [data.embedding for data in response.data]
+
+# Query
+query = "What is SGLang?"
+query_response = client.embeddings.create(
+    model="BAAI/bge-large-en-v1.5",
+    input=query
+)
+query_embedding = query_response.data[0].embedding
+
+# Find most similar document
+similarities = [cosine_similarity(query_embedding, doc_emb) 
+                for doc_emb in doc_embeddings]
+best_match_idx = np.argmax(similarities)
+print(f"Most relevant: {documents[best_match_idx]}")
+```
+
+### Clustering
+
+Group similar texts together:
+
+```python
+from sklearn.cluster import KMeans
+
+texts = ["text1", "text2", "text3", ...]  # Your texts
+
+response = client.embeddings.create(
+    model="BAAI/bge-large-en-v1.5",
+    input=texts
+)
+
+embeddings = np.array([data.embedding for data in response.data])
+
+# Cluster into 3 groups
+kmeans = KMeans(n_clusters=3, random_state=0)
+clusters = kmeans.fit_predict(embeddings)
+
+for i, cluster in enumerate(clusters):
+    print(f"Text {i} -> Cluster {cluster}")
+```
+
+## See Also
+
+- [Chat Completions](/api/http/chat-completions) - Generate text
+- [Completions](/api/http/completions) - Text completions
+- [Models](/api/http/models) - List available models

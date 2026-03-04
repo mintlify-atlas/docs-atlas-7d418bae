@@ -1,0 +1,718 @@
+---
+title: Kubernetes Deployment
+description: Deploy SGLang on Kubernetes for production-grade scalability and orchestration
+---
+
+## Overview
+
+Kubernetes provides robust orchestration for SGLang deployments, enabling auto-scaling, self-healing, and declarative configuration. This guide covers single-node and distributed multi-node deployments.
+
+## Prerequisites
+
+- Kubernetes cluster version ≥1.26
+- NVIDIA GPU Operator or device plugin installed
+- `kubectl` configured for cluster access
+- Storage class for persistent volumes (for model caching)
+
+### GPU Support Setup
+
+Install NVIDIA device plugin if not already available:
+
+```bash
+kubectl create -f https://raw.githubusercontent.com/NVIDIA/k8s-device-plugin/v0.14.0/nvidia-device-plugin.yml
+```
+
+Verify GPU nodes:
+
+```bash
+kubectl get nodes "-o=custom-columns=NAME:.metadata.name,GPU:.status.allocatable.nvidia\.com/gpu"
+```
+
+## Single-Node Deployment
+
+### Basic Deployment
+
+Deploy a single-replica SGLang server:
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: llama-31-8b-sglang
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 30Gi
+  storageClassName: default # change this to your preferred storage class
+  volumeMode: Filesystem
+---
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: nvidia
+handler: nvidia
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meta-llama-31-8b-instruct-sglang
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: meta-llama-31-8b-instruct-sglang
+  template:
+    metadata:
+      labels:
+        app: meta-llama-31-8b-instruct-sglang
+        model: meta-llama-31-8b-instruct
+        engine: sglang
+    spec:
+      restartPolicy: Always
+      runtimeClassName: nvidia
+      containers:
+        - name: meta-llama-31-8b-instruct-sglang
+          image: docker.io/lmsysorg/sglang:latest
+          imagePullPolicy: Always # IfNotPresent or Never
+          ports:
+            - containerPort: 30000
+          command: ["python3", "-m", "sglang.launch_server"]
+          args:
+            [
+              "--model-path",
+              "meta-llama/Llama-3.1-8B-Instruct",
+              "--host",
+              "0.0.0.0",
+              "--port",
+              "30000",
+            ]
+          env:
+            - name: HF_TOKEN
+              value: <secret>
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+              cpu: 8
+              memory: 40Gi
+            requests:
+              cpu: 2
+              memory: 16Gi
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+            - name: localtime
+              mountPath: /etc/localtime
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 30000
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health_generate
+              port: 30000
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 10Gi
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: llama-31-8b-sglang
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: meta-llama-31-8b-instruct-sglang
+spec:
+  selector:
+    app: meta-llama-31-8b-instruct-sglang
+  ports:
+    - protocol: TCP
+      port: 80 # port on host
+      targetPort: 30000 # port in container
+  type: LoadBalancer # change to ClusterIP if needed
+```
+
+Save as `sglang-deployment.yaml` and apply:
+
+```bash
+kubectl apply -f sglang-deployment.yaml
+```
+
+### Verify Deployment
+
+```bash
+# Check pod status
+kubectl get pods -l app=meta-llama-31-8b-instruct-sglang
+
+# View logs
+kubectl logs -f deployment/meta-llama-31-8b-instruct-sglang
+
+# Check service endpoint
+kubectl get svc meta-llama-31-8b-instruct-sglang
+```
+
+## Multi-Node Distributed Deployment
+
+### Using StatefulSet
+
+For multi-node tensor parallelism across nodes:
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distributed-sglang
+spec:
+  replicas: 2   # number of nodes/pods to run distributed sglang
+  selector:
+    matchLabels:
+      app: distributed-sglang
+  serviceName: ""
+  template:
+    metadata:
+      labels:
+        app: distributed-sglang
+    spec:
+      containers:
+      - name: sglang-container
+        image: docker.io/lmsysorg/sglang:latest
+        imagePullPolicy: Always
+        command:
+        - /bin/bash
+        - -c
+        args:
+        - |
+          python3 -m sglang.launch_server \
+          --model /llm-folder \
+          --dist-init-addr sglang-master-pod:5000 \
+          --tensor-parallel-size 16 \
+          --nnodes 2 \
+          --node-rank $POD_INDEX \
+          --trust-remote-code \
+          --host 0.0.0.0 \
+          --port 8000 \
+          --enable-metrics \
+          --expert-parallel-size 16
+        env:
+        - name: POD_INDEX     # reflects the node-rank
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+        - name: NCCL_DEBUG
+          value: INFO
+        resources:
+          limits:
+            nvidia.com/gpu: "8"
+        volumeMounts:
+        - mountPath: /dev/shm
+          name: dshm
+        - mountPath: /llm-folder
+          name: llm
+        securityContext:
+          privileged: true   # to leverage RDMA/InfiniBand device
+      hostNetwork: true
+      volumes:
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 10Gi
+        name: dshm
+      - hostPath:
+          path: /llm-folder # replace with PVC or hostPath with your model weights
+          type: DirectoryOrCreate
+        name: llm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-master-pod
+spec:
+  type: ClusterIP
+  selector:
+    app: distributed-sglang
+    apps.kubernetes.io/pod-index: "0"
+  ports:
+  - name: dist-port
+    port: 5000
+    targetPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-serving-on-master
+spec:
+  type: NodePort
+  selector:
+    app: distributed-sglang
+    apps.kubernetes.io/pod-index: "0"
+  ports:
+  - name: serving
+    port: 8000
+    targetPort: 8000
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+```
+
+Apply the configuration:
+
+```bash
+kubectl apply -f distributed-sglang.yaml
+```
+
+## LeaderWorkerSet (LWS) Deployment
+
+[LeaderWorkerSet](https://github.com/kubernetes-sigs/lws) is the recommended approach for multi-node distributed inference.
+
+### Prerequisites
+
+Install LeaderWorkerSet controller:
+
+```bash
+kubectl apply --server-side -f https://github.com/kubernetes-sigs/lws/releases/download/v0.6.0/manifests.yaml
+```
+
+Verify installation:
+
+```bash
+kubectl get crd leaderworkersets.leaderworkerset.x-k8s.io
+```
+
+### Basic LWS Configuration
+
+```yaml
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: sglang
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: 2
+    restartPolicy: RecreateGroupOnPodRestart
+    leaderTemplate:
+      metadata:
+        labels:
+          role: leader
+      spec:
+        dnsPolicy: ClusterFirstWithHostNet
+        hostNetwork: true
+        hostIPC: true
+        containers:
+          - name: sglang-leader
+            image: lmsysorg/sglang:latest
+            securityContext:
+              privileged: true
+            env:
+              - name: NCCL_IB_GID_INDEX
+                value: "3"
+            command:
+              - python3
+              - -m
+              - sglang.launch_server
+              - --model-path
+              - /work/models
+              - --tp
+              - "16"
+              - --dist-init-addr
+              - $(LWS_LEADER_ADDRESS):20000
+              - --nnodes
+              - $(LWS_GROUP_SIZE)
+              - --node-rank
+              - $(LWS_WORKER_INDEX)
+              - --trust-remote-code
+              - --host
+              - "0.0.0.0"
+              - --port
+              - "40000"
+            resources:
+              limits:
+                nvidia.com/gpu: "8"
+            ports:
+              - containerPort: 40000
+            readinessProbe:
+              tcpSocket:
+                port: 40000
+              initialDelaySeconds: 15
+              periodSeconds: 10
+            volumeMounts:
+              - mountPath: /dev/shm
+                name: dshm
+              - name: model
+                mountPath: /work/models
+              - name: ib
+                mountPath: /dev/infiniband
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+          - name: model
+            hostPath:
+              path: /path/to/models
+          - name: ib
+            hostPath:
+              path: /dev/infiniband
+    workerTemplate:
+      spec:
+        dnsPolicy: ClusterFirstWithHostNet
+        hostNetwork: true
+        hostIPC: true
+        containers:
+          - name: sglang-worker
+            image: lmsysorg/sglang:latest
+            securityContext:
+              privileged: true
+            env:
+            - name: NCCL_IB_GID_INDEX
+              value: "3"
+            command:
+              - python3
+              - -m
+              - sglang.launch_server
+              - --model-path
+              - /work/models
+              - --tp
+              - "16"
+              - --dist-init-addr
+              - $(LWS_LEADER_ADDRESS):20000
+              - --nnodes
+              - $(LWS_GROUP_SIZE)
+              - --node-rank
+              - $(LWS_WORKER_INDEX)
+              - --trust-remote-code
+            resources:
+              limits:
+                nvidia.com/gpu: "8"
+            volumeMounts:
+              - mountPath: /dev/shm
+                name: dshm
+              - name: model
+                mountPath: /work/models
+              - name: ib
+                mountPath: /dev/infiniband
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+          - name: ib
+            hostPath:
+              path: /dev/infiniband
+          - name: model
+            hostPath:
+              path: /path/to/models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-leader
+spec:
+  selector:
+    leaderworkerset.sigs.k8s.io/name: sglang
+    role: leader
+  ports:
+    - protocol: TCP
+      port: 40000
+      targetPort: 40000
+```
+
+### Deploy with LWS
+
+```bash
+kubectl apply -f sglang-lws.yaml
+```
+
+### Monitor LWS Deployment
+
+```bash
+# Check LeaderWorkerSet status
+kubectl get lws sglang
+
+# View all pods
+kubectl get pods -l leaderworkerset.sigs.k8s.io/name=sglang
+
+# Check leader logs
+kubectl logs -f sglang-0
+
+# Check worker logs
+kubectl logs -f sglang-0-1
+```
+
+## RDMA/InfiniBand Configuration
+
+For high-performance multi-node setups with RDMA:
+
+### Prerequisites
+
+1. Verify InfiniBand devices on nodes:
+
+```bash
+ibstatus
+ibdev2netdev
+```
+
+2. Check RDMA accessibility:
+
+```bash
+rdma link show
+```
+
+### RDMA-Enabled Deployment
+
+```yaml
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      hostIPC: true
+      containers:
+      - name: sglang
+        securityContext:
+          privileged: true
+          capabilities:
+            add:
+            - IPC_LOCK
+        env:
+        - name: NCCL_IB_GID_INDEX
+          value: "3"
+        - name: NCCL_IB_QPS_PER_CONNECTION
+          value: "8"
+        - name: NCCL_IB_SPLIT_DATA_ON_QPS
+          value: "1"
+        - name: NCCL_NET_PLUGIN
+          value: "none"
+        - name: NCCL_IB_HCA
+          value: "^=mlx5_0,mlx5_5,mlx5_6"
+        - name: NCCL_DEBUG
+          value: "INFO"
+        volumeMounts:
+        - name: ib
+          mountPath: /dev/infiniband
+      volumes:
+      - name: ib
+        hostPath:
+          path: /dev/infiniband
+```
+
+## Storage Configuration
+
+### Persistent Volume for Model Cache
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-cache
+spec:
+  accessModes:
+    - ReadWriteMany  # Required for multi-pod access
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: nfs-storage  # Use appropriate storage class
+```
+
+### Using hostPath (Development)
+
+```yaml
+volumes:
+- name: model-cache
+  hostPath:
+    path: /data/models
+    type: DirectoryOrCreate
+```
+
+### Using NFS (Production)
+
+```yaml
+volumes:
+- name: model-cache
+  nfs:
+    server: nfs-server.example.com
+    path: /exports/models
+```
+
+## Resource Management
+
+### Resource Requests and Limits
+
+```yaml
+resources:
+  requests:
+    cpu: "4"
+    memory: "32Gi"
+    nvidia.com/gpu: "1"
+  limits:
+    cpu: "8"
+    memory: "64Gi"
+    nvidia.com/gpu: "1"
+```
+
+### Node Selection
+
+```yaml
+nodeSelector:
+  gpu-type: nvidia-a100
+  node-role: inference
+```
+
+### Tolerations
+
+```yaml
+tolerations:
+- key: "nvidia.com/gpu"
+  operator: "Exists"
+  effect: "NoSchedule"
+```
+
+## Monitoring and Observability
+
+### Enable Metrics
+
+Add metrics endpoint to your deployment:
+
+```yaml
+args:
+  - --enable-metrics
+  - --metrics-port
+  - "8080"
+```
+
+### Prometheus Integration
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: sglang-metrics
+  labels:
+    app: sglang
+spec:
+  selector:
+    app: sglang
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sglang-metrics
+spec:
+  selector:
+    matchLabels:
+      app: sglang
+  endpoints:
+  - port: metrics
+    interval: 30s
+```
+
+## Scaling
+
+### Horizontal Pod Autoscaler
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sglang-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sglang-deployment
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+```
+
+## Troubleshooting
+
+### Pod Stuck in Pending
+
+```bash
+# Check events
+kubectl describe pod <pod-name>
+
+# Check GPU availability
+kubectl describe nodes | grep -A 5 "Allocated resources"
+```
+
+### NCCL Communication Failures
+
+```bash
+# Enable NCCL debug logs
+env:
+- name: NCCL_DEBUG
+  value: "TRACE"
+
+# Check network connectivity between pods
+kubectl exec -it <pod-name> -- ping <other-pod-ip>
+```
+
+### RDMA Issues
+
+```bash
+# Verify RDMA devices in container
+kubectl exec -it <pod-name> -- ibv_devices
+kubectl exec -it <pod-name> -- ibv_devinfo
+
+# Check RDMA link status
+kubectl exec -it <pod-name> -- rdma link show
+```
+
+### Out of Memory
+
+```bash
+# Increase shared memory
+volumes:
+- name: dshm
+  emptyDir:
+    medium: Memory
+    sizeLimit: 20Gi  # Increase as needed
+```
+
+## Best Practices
+
+1. **Use StatefulSet for multi-node**: StatefulSets provide stable network identities
+2. **Enable hostNetwork for RDMA**: Required for high-performance inter-node communication
+3. **Set privileged mode for InfiniBand**: Necessary for RDMA device access
+4. **Use ReadWriteMany PVCs**: Enable model sharing across pods
+5. **Configure health probes**: Implement both liveness and readiness probes
+6. **Set resource limits**: Prevent resource contention
+7. **Use specific image tags**: Avoid `latest` in production
+8. **Monitor NCCL environment**: Tune based on network topology
+
+## Next Steps
+
+- [Multi-Node Configuration](/deployment/multi-node) - Advanced multi-node setups
+- [Cloud Platforms](/deployment/cloud-platforms) - Managed Kubernetes on cloud providers
+- [Docker Deployment](/deployment/docker) - Container-based deployment

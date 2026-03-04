@@ -1,0 +1,349 @@
+---
+title: Speculative Decoding  
+description: Accelerate inference with EAGLE, MTP, and draft model speculation
+---
+
+SGLang provides industry-leading speculative decoding implementations, including EAGLE-2/EAGLE-3, Multi-Token Prediction (MTP), standalone draft models, and n-gram speculation.
+
+<Note>
+Our speculative decoding is considered among the fastest in open-source LLM engines.
+</Note>
+
+## Performance Highlights
+
+Tested on LLaMA-3.1-8B-Instruct with MT-Bench (1× H100):
+
+| Method | Throughput | Speedup |
+|--------|-----------|--------|
+| SGLang baseline | 158.34 tokens/s | 1.0× |
+| SGLang + EAGLE-2 | 244.10 tokens/s | 1.54× |
+| **SGLang + EAGLE-3** | **373.25 tokens/s** | **2.36×** |
+
+For details, see the [EAGLE-3 paper](https://arxiv.org/pdf/2503.01840).
+
+## Quick Guidance
+
+<CardGroup cols={2}>
+  <Card title="Best Speed (Recommended)" icon="rocket">
+    **EAGLE-3** - Use `--speculative-algorithm EAGLE3`
+  </Card>
+  <Card title="Broad Compatibility" icon="check">
+    **EAGLE-2** - Use `--speculative-algorithm EAGLE`  
+  </Card>
+  <Card title="MTP-Enabled Models" icon="layer-group">
+    **Multi-Token Prediction** - Use MTP via speculative decoding
+  </Card>
+  <Card title="No Draft Model" icon="memory">
+    **N-gram** - Use `--speculative-algorithm NGRAM` (CUDA-only)
+  </Card>
+</CardGroup>
+
+## Method Comparison
+
+| Method | Draft Source | Separate Model? | How to Enable | Notes |
+|--------|--------------|----------------|---------------|-------|
+| EAGLE-2 | EAGLE draft model | Yes | `--speculative-algorithm EAGLE` | Tune `num-steps`, `eagle-topk`, `num-draft-tokens` |
+| EAGLE-3 | EAGLE-3 draft model | Yes | `--speculative-algorithm EAGLE3` | Best throughput |
+| MTP | Built-in heads | Often no | See MTP section | Model-specific |
+| STANDALONE | Smaller draft LLM | Yes | `--speculative-algorithm STANDALONE` | Token-level drafting |
+| NGRAM | N-gram cache | No | `--speculative-algorithm NGRAM` | CUDA-only, no DP attention |
+
+## EAGLE-2 Decoding
+
+EAGLE-2 uses a specialized draft model that predicts feature vectors (hidden states) instead of tokens directly, enabling more accurate speculation.
+
+### Basic Setup
+
+```bash
+python -m sglang.launch_server \
+    --model meta-llama/Llama-2-7b-chat-hf \
+    --speculative-algorithm EAGLE \
+    --speculative-draft-model-path lmsys/sglang-EAGLE-llama2-chat-7B \
+    --speculative-num-steps 3 \
+    --speculative-eagle-topk 4 \
+    --speculative-num-draft-tokens 16 \
+    --mem-fraction-static 0.7 \
+    --cuda-graph-max-bs 8
+```
+
+### Making Requests
+
+```python
+import openai
+
+client = openai.Client(base_url="http://127.0.0.1:30000/v1", api_key="None")
+
+response = client.chat.completions.create(
+    model="meta-llama/Llama-2-7b-chat-hf",
+    messages=[{"role": "user", "content": "List 3 countries and their capitals."}],
+    temperature=0,
+    max_tokens=64,
+)
+
+print(response.choices[0].message.content)
+```
+
+### Key Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|----------|
+| `--speculative-num-steps` | Depth of autoregressive drafting | Auto (5 for Llama, 3 for others) |
+| `--speculative-eagle-topk` | Branching factor per step | Auto (4 for Llama, 1 for others) |
+| `--speculative-num-draft-tokens` | Max parallel verification capacity | Auto (8 for Llama, 4 for others) |
+| `--speculative-draft-model-path` | Path to draft model weights | Required |
+
+<Tip>
+Use [bench_speculative.py](https://github.com/sgl-project/sglang/blob/main/scripts/playground/bench_speculative.py) to find optimal parameter combinations for your workload.
+</Tip>
+
+## EAGLE-3 Decoding
+
+EAGLE-3 improves upon EAGLE-2 by:
+- Removing the feature prediction objective
+- Incorporating low and mid-layer features
+- Training in an on-policy manner
+
+```bash
+python -m sglang.launch_server \
+    --model meta-llama/Meta-Llama-3.1-8B-Instruct \
+    --speculative-algorithm EAGLE3 \
+    --speculative-draft-model-path jamesliu1/sglang-EAGLE3-Llama-3.1-Instruct-8B \
+    --speculative-num-steps 3 \
+    --speculative-eagle-topk 4 \
+    --speculative-num-draft-tokens 16 \
+    --mem-fraction-static 0.7 \
+    --dtype float16
+```
+
+<Note>
+For training your own EAGLE-3 models, see [SpecForge](https://github.com/sgl-project/SpecForge), the SGLang team's training framework.
+</Note>
+
+## Advanced EAGLE Features
+
+### torch.compile Optimization
+
+Enable kernel-level optimizations for the draft model:
+
+```bash
+python -m sglang.launch_server \
+    --model meta-llama/Llama-2-7b-chat-hf \
+    --speculative-algorithm EAGLE \
+    --speculative-draft-model-path lmsys/sglang-EAGLE-llama2-chat-7B \
+    --enable-torch-compile \
+    --torch-compile-max-bs 8
+```
+
+<Accordion title="When does torch.compile help?">
+The benefit depends on hardware, model architecture, and batch size. On H100 with small draft models and CUDA graphs enabled, the improvement may be negligible. Always benchmark on your specific setup.
+</Accordion>
+
+### FR-Spec (Frequency-Ranked Speculation)
+
+Reduce `lm_head` overhead by using a truncated high-frequency token vocabulary:
+
+```bash
+python -m sglang.launch_server \
+    --model meta-llama/Meta-Llama-3-8B-Instruct \
+    --speculative-algorithm EAGLE \
+    --speculative-draft-model-path lmsys/sglang-EAGLE-LLaMA3-Instruct-8B \
+    --speculative-token-map thunlp/LLaMA3-Instruct-8B-FR-Spec/freq_32768.pt \
+    --dtype float16
+```
+
+For more details, see the [FR-Spec paper](https://arxiv.org/pdf/2502.14856).
+
+## Multi-Token Prediction (MTP)
+
+Some models have built-in multi-token prediction heads. Use speculative decoding to leverage them:
+
+```bash
+python -m sglang.launch_server \
+    --model XiaomiMiMo/MiMo-7B-RL \
+    --trust-remote-code \
+    --speculative-algorithm EAGLE \
+    --speculative-num-steps 1 \
+    --speculative-eagle-topk 1 \
+    --speculative-num-draft-tokens 2
+```
+
+For DeepSeek MTP usage, see the [DeepSeek V3.2 documentation](../basic_usage/deepseek_v32.md#multi-token-prediction).
+
+## Standalone Draft Model
+
+Use a smaller model as a draft for token-level speculation:
+
+```bash
+python -m sglang.launch_server \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --speculative-algorithm STANDALONE \
+    --speculative-draft-model-path Qwen/Qwen2.5-1.5B-Instruct \
+    --speculative-num-steps 4 \
+    --speculative-eagle-topk 2 \
+    --speculative-num-draft-tokens 7
+```
+
+<Warning>
+Standalone speculative decoding does not support `--enable-dp-attention`.
+</Warning>
+
+## N-gram Speculation
+
+Use n-gram matching from previous generations (no separate draft model required):
+
+```bash
+python -m sglang.launch_server \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --speculative-algorithm NGRAM \
+    --speculative-num-draft-tokens 16 \
+    --speculative-ngram-max-match-window-size 12 \
+    --speculative-ngram-max-bfs-breadth 10
+```
+
+### N-gram Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|----------|
+| `--speculative-ngram-min-match-window-size` | Minimum matching window | 1 |
+| `--speculative-ngram-max-match-window-size` | Maximum matching window | 12 |
+| `--speculative-ngram-min-bfs-breadth` | Minimum BFS breadth | 1 |
+| `--speculative-ngram-max-bfs-breadth` | Maximum BFS breadth | 10 |
+| `--speculative-ngram-capacity` | Cache capacity | 10,000,000 |
+
+<Warning>
+- N-gram only supports CUDA
+- Does not support `--enable-dp-attention`  
+- Disables overlap scheduler and mixed chunked prefill
+</Warning>
+
+## Speculative Decoding V2 (Experimental)
+
+Enable overlap scheduler for improved pipelining:
+
+```bash
+SGLANG_ENABLE_SPEC_V2=True python -m sglang.launch_server \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --speculative-algorithm STANDALONE \
+    --speculative-draft-model-path Qwen/Qwen2.5-1.5B-Instruct \
+    --speculative-num-steps 4 \
+    --speculative-eagle-topk 1 \
+    --speculative-num-draft-tokens 5
+```
+
+<Warning>
+SpecV2 only supports `--speculative-eagle-topk 1`. Always set this explicitly when using SpecV2.
+</Warning>
+
+## OOM Troubleshooting
+
+Speculative decoding increases memory usage. If you encounter OOM errors:
+
+### Step 1: Lower Static Memory Fraction
+
+```bash
+--mem-fraction-static 0.5
+```
+
+This is the most effective adjustment.
+
+### Step 2: Reduce CUDA Graph Batch Size
+
+```bash
+--cuda-graph-max-bs 4  # or even 2
+```
+
+### Step 3: Reduce Draft Tree Size
+
+```bash
+--speculative-num-steps 3 \
+--speculative-eagle-topk 1 \
+--speculative-num-draft-tokens 4
+```
+
+### Step 4: Limit Concurrent Requests
+
+```bash
+--max-running-requests 4
+```
+
+### Quick Recovery Recipe
+
+If OOM, start with this minimal config:
+
+```bash
+python -m sglang.launch_server \
+    --model <your-model> \
+    --speculative-algorithm EAGLE \
+    --speculative-draft-model-path <draft-model> \
+    --speculative-num-steps 3 \
+    --speculative-eagle-topk 1 \
+    --speculative-num-draft-tokens 4 \
+    --cuda-graph-max-bs 2 \
+    --mem-fraction-static 0.5 \
+    --max-running-requests 4
+```
+
+Then gradually increase parameters.
+
+## Implementation Details
+
+### EAGLE Process
+
+1. **Feature Prediction**: Draft model predicts next feature vector (last hidden state) using feature sequence and token sequence
+2. **Tree Expansion**: Branches out multiple continuations with `speculative-eagle-topk` branching factor
+3. **Token Sampling**: Samples tokens from `lm_head(features)`  
+4. **Verification**: Target model verifies all draft tokens in parallel
+5. **Acceptance**: Accepts longest valid prefix
+
+Source: `python/sglang/srt/speculative/spec_info.py:15`
+
+### SpeculativeAlgorithm Enum
+
+```python
+class SpeculativeAlgorithm(Enum):
+    EAGLE = auto()    # EAGLE-2
+    EAGLE3 = auto()   # EAGLE-3
+    STANDALONE = auto()  # Draft model
+    NGRAM = auto()    # N-gram matching
+    NONE = auto()
+```
+
+Source: `python/sglang/srt/speculative/spec_info.py:15`
+
+## Training EAGLE Models
+
+For training your own EAGLE draft models:
+- EAGLE-2: See [EAGLE repo](https://github.com/SafeAILab/EAGLE)
+- EAGLE-3: See [SpecForge](https://github.com/sgl-project/SpecForge) and [blog post](https://lmsys.org/blog/2025-07-25-spec-forge)
+
+## Full Parameter Reference
+
+<AccordionGroup>
+  <Accordion title="Core Parameters">
+    | Parameter | Type | Default | Description |
+    |-----------|------|---------|-------------|
+    | `--speculative-algorithm` | str | None | `EAGLE`, `EAGLE3`, `STANDALONE`, `NGRAM` |
+    | `--speculative-draft-model-path` | str | None | Path to draft model |
+    | `--speculative-num-steps` | int | Auto | Drafting depth |
+    | `--speculative-eagle-topk` | int | Auto | Branching factor |
+    | `--speculative-num-draft-tokens` | int | Auto | Verification capacity |
+  </Accordion>
+  
+  <Accordion title="Advanced Parameters">
+    | Parameter | Type | Default | Description |
+    |-----------|------|---------|-------------|
+    | `--speculative-token-map` | str | None | FR-Spec token map path |
+    | `--speculative-draft-model-quantization` | str | Same as target | Draft quantization |
+    | `--speculative-attention-mode` | str | "prefill" | `"prefill"` or `"decode"` |
+    | `--enable-torch-compile` | bool | False | Enable torch.compile |
+    | `--enable-multi-layer-eagle` | bool | Auto | Multi-layer EAGLE |
+  </Accordion>
+</AccordionGroup>
+
+## References
+
+- [EAGLE-2 Paper](https://arxiv.org/abs/2406.16858)
+- [EAGLE-3 Paper](https://arxiv.org/abs/2503.01840)  
+- [FR-Spec Paper](https://arxiv.org/pdf/2502.14856)
+- [S-LoRA Paper](https://arxiv.org/pdf/2311.03285) (tensor sharding strategy)
+- [SpecForge Training Framework](https://github.com/sgl-project/SpecForge)

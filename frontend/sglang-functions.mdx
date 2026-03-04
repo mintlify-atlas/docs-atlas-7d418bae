@@ -1,0 +1,355 @@
+---
+title: SGLang Functions
+description: Learn how to define and use SGLang functions with the @sgl.function decorator
+---
+
+The `@sgl.function` decorator is the foundation of SGLang's frontend language. It transforms a regular Python function into an SGLang program that can be executed with various backends and execution modes.
+
+## Basic Usage
+
+### Defining a Function
+
+Use the `@sgl.function` decorator to create an SGLang function:
+
+```python
+import sglang as sgl
+
+@sgl.function
+def text_qa(s, question):
+    s += "Q: " + question + "\n"
+    s += "A:" + sgl.gen("answer", stop="\n")
+```
+
+The first parameter `s` is the **state object** that manages the conversation context. All other parameters become inputs to your function.
+
+### Running Functions
+
+Once defined, SGLang functions gain special methods for execution:
+
+```python
+# Single execution
+state = text_qa.run(question="What is the capital of France?")
+print(state["answer"])
+
+# Batch execution
+states = text_qa.run_batch(
+    [
+        {"question": "What is the capital of the United Kingdom?"},
+        {"question": "What is the capital of France?"},
+    ]
+)
+
+# Streaming execution
+state = text_qa.run(question="What is the capital of France?", stream=True)
+for out in state.text_iter():
+    print(out, end="", flush=True)
+```
+
+## The State Object
+
+The state object (`s`) is the core of every SGLang function. It provides methods and operators to build prompts and control execution flow.
+
+### Appending Content
+
+Use the `+=` operator to append text to the state:
+
+```python
+@sgl.function
+def example(s, name):
+    s += "Hello, "
+    s += name
+    s += "!"
+```
+
+### Accessing Variables
+
+Use dictionary-style access to retrieve generated content:
+
+```python
+@sgl.function
+def example(s):
+    s += "Tell me a number: " + sgl.gen("number", max_tokens=10)
+    s += f"\nYou said: {s['number']}"
+```
+
+### Role Management
+
+For chat models, use role methods to structure conversations:
+
+```python
+@sgl.function
+def chat_example(s, user_message):
+    s += sgl.system("You are a helpful assistant.")
+    s += sgl.user(user_message)
+    s += sgl.assistant(sgl.gen("response", max_tokens=256))
+```
+
+Alternatively, use context managers for complex role structures:
+
+```python
+@sgl.function
+def chat_with_context(s, user_message):
+    with s.user():
+        s += "Context: This is important.\n"
+        s += user_message
+    
+    with s.assistant():
+        s += sgl.gen("response", max_tokens=256)
+```
+
+## Execution Methods
+
+### `.run()` - Single Execution
+
+Execute a single request:
+
+```python
+state = my_function.run(
+    param1="value1",
+    param2="value2",
+    # Sampling parameters
+    temperature=0.7,
+    max_tokens=100,
+    stream=False
+)
+```
+
+**Parameters:**
+- Function arguments (positional and keyword)
+- Sampling parameters (temperature, max_tokens, top_p, etc.)
+- `stream` (bool): Enable streaming output
+- `backend` (BaseBackend): Override the default backend
+
+**Returns:**
+- `ProgramState`: A state object containing results
+
+### `.run_batch()` - Batch Execution
+
+Process multiple inputs efficiently:
+
+```python
+states = my_function.run_batch(
+    [
+        {"param1": "value1", "param2": "value2"},
+        {"param1": "value3", "param2": "value4"},
+    ],
+    # Sampling parameters apply to all
+    temperature=0.7,
+    num_threads="auto",
+    progress_bar=True
+)
+```
+
+**Parameters:**
+- `batch_arguments` (List[Dict]): List of argument dictionaries
+- Sampling parameters (applied to all requests)
+- `num_threads` (int | "auto"): Number of parallel threads
+- `progress_bar` (bool): Show progress bar
+- `backend` (BaseBackend): Override the default backend
+
+**Returns:**
+- `List[ProgramState]`: List of state objects
+
+### Generator-Style Batch Processing
+
+For large batches, use generator mode to process results as they complete:
+
+```python
+for state in my_function.run_batch(
+    batch_arguments,
+    generator_style=True
+):
+    # Process each result as it becomes available
+    print(state["answer"])
+```
+
+## Advanced Features
+
+### Parallel Sampling with Fork/Join
+
+Generate multiple responses in parallel and gather results:
+
+```python
+@sgl.function
+def parallel_sample(s, question, n):
+    s += "Question: " + question + "\n"
+    
+    # Fork into n parallel branches
+    forks = s.fork(n)
+    
+    # Each fork generates independently
+    forks += "Reasoning:" + sgl.gen("reasoning", stop="\n") + "\n"
+    forks += "Answer:" + sgl.gen("answer", stop="\n") + "\n"
+    
+    # Join results back (optional)
+    forks.join()
+
+state = parallel_sample.run(question="Compute 5 + 2 + 4.", n=5, temperature=1.0)
+
+# Access results from each fork
+for i in range(5):
+    print(f"Fork {i}: reasoning={state['reasoning'][i]}, answer={state['answer'][i]}")
+```
+
+**Fork Methods:**
+- `s.fork(n)`: Create n parallel branches
+- `forks[i]`: Access individual fork
+- `forks += expr`: Apply expression to all forks
+- `forks.join()`: Merge results back
+
+### Copy Context
+
+Create a temporary copy of the state:
+
+```python
+@sgl.function
+def with_copy(s):
+    s += "Original context\n"
+    
+    with s.copy() as copied:
+        copied += "This is in the copy\n"
+        copied += sgl.gen("temp", max_tokens=10)
+    
+    # Original state is unchanged
+    s += "Back to original\n"
+```
+
+### Variable Scopes
+
+Capture specific sections of generated text:
+
+```python
+@sgl.function
+def with_scope(s):
+    with s.var_scope("section"):
+        s += "This entire section "
+        s += "will be captured "
+        s += "in the variable."
+    
+    print(s["section"])  # Contains the full section text
+```
+
+## API Speculative Execution
+
+For chat-based API backends (OpenAI, Anthropic), SGLang can speculatively execute multiple generation calls in a single API request:
+
+```python
+@sgl.function(num_api_spec_tokens=200)
+def multi_gen_chat(s, question):
+    s += sgl.user(question)
+    s += sgl.assistant(
+        "Let me think: " + 
+        sgl.gen("thought", max_tokens=50) +
+        "\nAnswer: " +
+        sgl.gen("answer", max_tokens=100)
+    )
+```
+
+This sends a single API request with `max_tokens=200` instead of two separate requests.
+
+**Syntax:**
+```python
+@sgl.function(num_api_spec_tokens=int)
+```
+
+## State Object Reference
+
+### Properties
+
+```python
+state.text()          # Get full generated text
+state.messages()      # Get conversation messages (chat format)
+state["var_name"]     # Access a generated variable
+state.error()         # Get any error that occurred
+```
+
+### Methods
+
+```python
+state.sync()                          # Wait for async operations
+state.text_iter()                     # Iterate over streaming text
+state.text_iter(var_name="answer")    # Stream a specific variable
+state.text_async_iter()               # Async streaming iterator
+state.get_var("name")                 # Get variable value
+state.set_var("name", value)          # Set variable value
+state.get_meta_info("name")           # Get generation metadata
+state.fork(n)                         # Create parallel branches
+```
+
+## Setting Default Backend
+
+Before running functions, set a default backend:
+
+```python
+import sglang as sgl
+
+# Local Runtime
+runtime = sgl.Runtime(model_path="meta-llama/Llama-2-7b-chat-hf")
+sgl.set_default_backend(runtime)
+
+# OpenAI
+sgl.set_default_backend(sgl.OpenAI("gpt-3.5-turbo"))
+
+# Anthropic
+sgl.set_default_backend(sgl.Anthropic("claude-3-haiku-20240307"))
+
+# Remote Runtime Endpoint
+sgl.set_default_backend(sgl.RuntimeEndpoint("http://localhost:30000"))
+```
+
+You can also override the backend per-call:
+
+```python
+state = my_function.run(
+    question="What is AI?",
+    backend=sgl.OpenAI("gpt-4")
+)
+```
+
+## Complete Example
+
+Here's a complete example demonstrating multiple features:
+
+```python
+import sglang as sgl
+
+@sgl.function
+def multi_turn_question(s, question_1, question_2):
+    s += sgl.system("You are a helpful assistant.")
+    s += sgl.user(question_1)
+    s += sgl.assistant(sgl.gen("answer_1", max_tokens=256))
+    s += sgl.user(question_2)
+    s += sgl.assistant(sgl.gen("answer_2", max_tokens=256))
+
+if __name__ == "__main__":
+    # Set backend
+    sgl.set_default_backend(sgl.OpenAI("gpt-3.5-turbo"))
+    
+    # Single execution
+    state = multi_turn_question.run(
+        question_1="What is the capital of the United States?",
+        question_2="List two local attractions.",
+    )
+    
+    for m in state.messages():
+        print(m["role"], ":", m["content"])
+    
+    print("\n-- answer_1 --\n", state["answer_1"])
+    
+    # Batch execution
+    states = multi_turn_question.run_batch(
+        [
+            {
+                "question_1": "What is the capital of the United States?",
+                "question_2": "List two local attractions.",
+            },
+            {
+                "question_1": "What is the capital of France?",
+                "question_2": "What is the population of this city?",
+            },
+        ]
+    )
+    
+    for s in states:
+        print(s.messages())
+```

@@ -1,0 +1,130 @@
+---
+title: sglang version
+description: Display SGLang version and git revision information
+---
+
+## Overview
+
+The `sglang version` command displays the current version of SGLang and the git revision (commit hash) of the installation.
+
+## Basic Usage
+
+```bash
+sglang version
+```
+
+## Arguments
+
+This command takes no arguments or options.
+
+## Output
+
+The command displays two lines of information:
+
+1. **SGLang version**: The semantic version number of the installed SGLang package
+2. **Git revision**: The first 7 characters of the git commit hash from which the package was built
+
+### Example Output
+
+```
+sglang version: 0.5.0
+git revision: a1b2c3d
+```
+
+### When Git Information is Unavailable
+
+If the git information cannot be determined (e.g., when installed from a release package or in environments without git), the output will show:
+
+```
+sglang version: 0.5.0
+git revision: N/A
+```
+
+## Use Cases
+
+### Version Verification
+
+Check which version of SGLang is currently installed:
+
+```bash
+sglang version
+```
+
+### Bug Reporting
+
+When reporting issues, include the version information to help maintainers reproduce and diagnose problems:
+
+```bash
+$ sglang version
+sglang version: 0.5.0
+git revision: a1b2c3d
+```
+
+### CI/CD Integration
+
+Use in scripts to verify the correct version is installed:
+
+```bash
+#!/bin/bash
+echo "Checking SGLang version..."
+sglang version
+```
+
+### Version Comparison
+
+Compare versions across different environments:
+
+```bash
+# Development environment
+user@dev:~$ sglang version
+sglang version: 0.5.0
+git revision: a1b2c3d
+
+# Production environment
+user@prod:~$ sglang version
+sglang version: 0.4.9
+git revision: x9y8z7w
+```
+
+## Environment Variables
+
+The git commit hash can be overridden using the `SGLANG_GIT_COMMIT` environment variable:
+
+```bash
+export SGLANG_GIT_COMMIT="custom-commit-hash"
+sglang version
+```
+
+Output:
+```
+sglang version: 0.5.0
+git revision: custom-c
+```
+
+This is useful in containerized environments where git history might not be available.
+
+## Implementation Details
+
+The version command retrieves information from:
+
+1. **Version number**: From `sglang.version.__version__`
+2. **Git revision**: 
+   - First checks the `SGLANG_GIT_COMMIT` environment variable
+   - Falls back to running `git rev-parse HEAD` in the repository
+   - Returns "N/A" if neither method succeeds
+
+The displayed git revision is truncated to the first 7 characters for brevity, which is sufficient for uniquely identifying commits in most repositories.
+
+## Exit Codes
+
+The command always exits with status code `0` (success), even when git information is unavailable.
+
+## Related Commands
+
+- [sglang serve](/api/cli/serve) - Launch the SGLang server
+- [sglang generate](/api/cli/generate) - Run inference on a multimodal model
+
+## Additional Resources
+
+- Check the [SGLang GitHub releases](https://github.com/sgl-project/sglang/releases) for version history
+- Review the [CHANGELOG](https://github.com/sgl-project/sglang/blob/main/CHANGELOG.md) for detailed version differences

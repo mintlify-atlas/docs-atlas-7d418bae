@@ -1,0 +1,309 @@
+---
+title: Troubleshooting
+description: Common errors and tips for resolving them
+---
+
+This page lists common errors and tips for resolving them when running SGLang.
+
+## CUDA Out of Memory
+
+If you encounter out-of-memory (OOM) errors, you can adjust the following parameters:
+
+### During Prefill
+
+If OOM occurs during prefill, try reducing `--chunked-prefill-size` to `4096` or `2048`. This saves memory but slows down the prefill speed for long prompts.
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --chunked-prefill-size 4096
+```
+
+### During Decoding
+
+If OOM occurs during decoding, try lowering `--max-running-requests`:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --max-running-requests 128
+```
+
+### Memory Pool Size
+
+You can also decrease `--mem-fraction-static` to a smaller value, such as 0.8 or 0.7. This decreases the memory usage of the KV cache memory pool and helps prevent OOM errors during both prefill and decoding. However, it limits maximum concurrency and reduces peak throughput.
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --mem-fraction-static 0.7
+```
+
+### Input Logprobs for Long Prompts
+
+Another common case for OOM is requesting input logprobs for a long prompt as it requires significant memory. To address this, set `logprob_start_len` in your sampling parameters to include only the necessary parts:
+
+```python
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Your long prompt..."}],
+    extra_body={
+        "logprob_start_len": 100  # Only compute logprobs from token 100 onwards
+    }
+)
+```
+
+If you do need input logprobs for a long prompt, try reducing `--mem-fraction-static`.
+
+## CUDA Error: Illegal Memory Access Encountered
+
+This error may result from kernel errors or out-of-memory issues:
+
+### Kernel Error
+
+If it is a kernel error, resolving it may be challenging. Please file an issue on [GitHub](https://github.com/sgl-project/sglang/issues) with:
+- Your model configuration
+- Full error traceback
+- SGLang version (`pip show sglang`)
+- GPU type and CUDA version
+- Minimal reproduction steps
+
+### Out of Memory
+
+If it is an out-of-memory issue, it may sometimes be reported as this error instead of "Out of Memory." Refer to the [CUDA Out of Memory](#cuda-out-of-memory) section above for guidance on avoiding OOM issues.
+
+## The Server Hangs
+
+If the server hangs during initialization or running, it can be due to:
+
+### Memory Issues
+
+If it is out of memory, you might see that `avail mem` is very low during the initialization or right after initialization. In this case, you can try to:
+
+- Decrease `--mem-fraction-static`:
+  ```bash
+  --mem-fraction-static 0.7
+  ```
+
+- Decrease `--cuda-graph-max-bs`:
+  ```bash
+  --cuda-graph-max-bs 128
+  ```
+
+- Decrease `--chunked-prefill-size`:
+  ```bash
+  --chunked-prefill-size 4096
+  ```
+
+### Network Issues
+
+For multi-GPU or multi-node setups, the server might hang due to NCCL errors. Check:
+
+- Network connectivity between nodes
+- NCCL environment variables (e.g., `NCCL_DEBUG=INFO` for detailed logs)
+- Firewall settings
+- InfiniBand/RDMA configuration if applicable
+
+### Other Bugs
+
+For other bugs, please file an issue on [GitHub](https://github.com/sgl-project/sglang/issues) with detailed information.
+
+## Model Loading Issues
+
+### Model Not Found
+
+If you see errors like "Model not found" or "Repository not found":
+
+1. **Check model path**: Ensure the model path is correct
+2. **Hugging Face authentication**: For private models, set your token:
+   ```bash
+   export HF_TOKEN=your_token_here
+   ```
+3. **Use ModelScope** (in China):
+   ```bash
+   export SGLANG_USE_MODELSCOPE=true
+   ```
+
+### Unsupported Model Architecture
+
+If your model architecture is not supported:
+
+1. Check the [supported models](/supported-models) documentation
+2. Try using `--trust-remote-code` if the model uses custom code
+3. Consider using the [Transformers fallback](/supported-models/extending/transformers-fallback)
+4. See [Adding Support for New Models](/supported-models/extending/support-new-models)
+
+## Performance Issues
+
+### Low Throughput
+
+1. **Check GPU utilization**: Use `nvidia-smi dmon` to monitor GPU usage
+2. **Increase batch size**: Try `--max-running-requests 256` or higher
+3. **Enable CUDA graphs**: Add `--disable-cuda-graph false`
+4. **Tune chunked prefill**: Adjust `--chunked-prefill-size`
+5. **Use quantization**: Consider FP8 or INT4 quantization
+
+See [Hyperparameter Tuning](/advanced-features/hyperparameter-tuning) for detailed guidance.
+
+### High Latency
+
+1. **Reduce batch size**: Lower `--max-running-requests`
+2. **Decrease chunked prefill size**: Set `--chunked-prefill-size 2048`
+3. **Disable prefix caching**: Add `--disable-radix-cache` (if determinism is needed)
+4. **Check for resource contention**: Ensure no other processes are competing for GPU
+
+## API and Integration Issues
+
+### Connection Refused
+
+If you can't connect to the server:
+
+1. **Check server is running**: Look for "SGLang started successfully" in logs
+2. **Verify host and port**:
+   ```bash
+   curl http://localhost:30000/health
+   ```
+3. **Check firewall**: Ensure port is not blocked
+4. **Network configuration**: For remote connections, verify `--host 0.0.0.0`
+
+### Request Timeout
+
+If requests are timing out:
+
+1. **Increase client timeout**: Set a longer timeout in your client
+2. **Check request queue**: Might be overloaded, increase `--max-running-requests`
+3. **Monitor server logs**: Look for errors or warnings
+4. **Set request timeouts**:
+   ```bash
+   export SGLANG_REQ_WAITING_TIMEOUT=300  # 5 minutes in seconds
+   export SGLANG_REQ_RUNNING_TIMEOUT=300
+   ```
+
+### Incorrect Output Format
+
+If the output format is not as expected:
+
+1. **Check chat template**: Some models require specific templates
+2. **Verify model compatibility**: Ensure model supports the requested features
+3. **Review sampling parameters**: Check temperature, top_p, max_tokens, etc.
+4. **Use custom chat template**: See [Custom Chat Template](/references/custom-chat-template)
+
+## Multi-GPU and Distributed Issues
+
+### Tensor Parallelism Errors
+
+If you encounter errors with tensor parallelism:
+
+1. **Check GPU count**: Ensure `--tp` matches available GPUs
+2. **Verify NCCL**: Test with `NCCL_DEBUG=INFO`
+3. **P2P access**: Some GPUs require enabling peer-to-peer access
+4. **Memory imbalance**: Check `SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK`
+
+### Multi-Node Communication
+
+For multi-node setups:
+
+1. **Network configuration**: Ensure all nodes can communicate
+2. **NCCL settings**: May need to configure `NCCL_SOCKET_IFNAME`, `NCCL_IB_DISABLE`, etc.
+3. **Shared filesystem**: Some features require shared storage
+4. **Synchronization**: Check clock synchronization across nodes
+
+See [Multi-Node Deployment](/references/multi-node-deployment) for details.
+
+## Quantization Issues
+
+### Quantized Model Loading Fails
+
+1. **Check quantization format**: Ensure it's supported (AWQ, GPTQ, FP8, etc.)
+2. **Verify model files**: Check that quantized weights are present
+3. **GPU compatibility**: FP8 requires Hopper or later GPUs
+4. **Install dependencies**: Some quantization methods need additional packages
+
+See [Quantization](/advanced-features/quantization) for supported formats.
+
+### Accuracy Degradation
+
+If quantized models produce poor results:
+
+1. **Try different quantization methods**: FP8 > INT8 > INT4 in terms of accuracy
+2. **Check calibration**: Some models need proper calibration data
+3. **Per-channel vs per-tensor**: Per-channel quantization usually gives better results
+4. **Compare with FP16**: Verify model works correctly without quantization
+
+## Vision and Multimodal Issues
+
+### Image Loading Errors
+
+If images aren't loading properly:
+
+1. **Check image format**: Ensure it's a supported format (PNG, JPEG, etc.)
+2. **Verify image URL**: Test the URL in a browser
+3. **Image size**: Very large images may cause OOM
+4. **Base64 encoding**: For base64 images, check encoding is correct
+
+### Multimodal Model Errors
+
+1. **Check model support**: Verify the model supports multimodal inputs
+2. **Message format**: Follow the correct message structure with image_url
+3. **Memory requirements**: Multimodal models need more memory
+4. **Environment variables**: Check `SGLANG_MM_BUFFER_SIZE_MB` and related settings
+
+## Debugging Tips
+
+### Enable Verbose Logging
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --log-level debug
+```
+
+### Check System Information
+
+```bash
+# GPU information
+nvidia-smi
+
+# SGLang version
+pip show sglang
+
+# CUDA version
+nvcc --version
+
+# Python version
+python --version
+```
+
+### Monitor GPU Memory
+
+```bash
+# Continuous monitoring
+watch -n 1 nvidia-smi
+
+# Or use
+nvidia-smi dmon -s mu
+```
+
+### Profile Performance
+
+See [Benchmark and Profiling](/developer-guide/benchmark-and-profiling) for detailed profiling instructions.
+
+## Getting Help
+
+If you're still experiencing issues:
+
+1. **Search existing issues**: Check [GitHub Issues](https://github.com/sgl-project/sglang/issues)
+2. **Join Slack**: Ask in the community at https://slack.sglang.io/
+3. **File a bug report**: Include:
+   - SGLang version
+   - GPU type and driver version
+   - Full error traceback
+   - Minimal reproduction code
+   - Model and configuration used
+
+## See Also
+
+- [FAQ](/resources/faq) - Frequently asked questions
+- [Environment Variables](/resources/environment-variables) - Configuration reference
+- [Hyperparameter Tuning](/advanced-features/hyperparameter-tuning) - Performance optimization
+- [Server Arguments](/advanced-features/server-arguments) - Command-line options

@@ -1,0 +1,488 @@
+---
+title: "Data Parallelism"
+description: "Replicate models across GPUs for maximum throughput"
+---
+
+## Overview
+
+Data Parallelism (DP) replicates the entire model across multiple GPU sets, with each replica processing independent batches of requests. This is the simplest and most effective way to scale throughput when you have sufficient GPU memory.
+
+### Types of Data Parallelism
+
+1. **Standard DP:** Full model replication, independent inference per replica
+2. **Data Parallelism Attention (DPA):** Advanced strategy that applies DP specifically to attention layers
+
+## Standard Data Parallelism
+
+### How It Works
+
+```
+GPU Set 0 (Full Model)  →  Batch A
+GPU Set 1 (Full Model)  →  Batch B
+GPU Set 2 (Full Model)  →  Batch C
+GPU Set 3 (Full Model)  →  Batch D
+```
+
+Each replica:
+- Has a complete copy of model weights
+- Processes different batches independently
+- No inter-replica communication during inference
+
+### When to Use Standard DP
+
+**Use standard DP when:**
+- Model fits in GPU memory (or across TP within a node)
+- Need to maximize throughput with simple scaling
+- Working with standard attention models (Llama, Qwen, Mistral)
+- Have sufficient GPU resources for full replicas
+
+## Data Parallelism Attention (DPA)
+
+DPA is an advanced parallelism strategy that applies data parallelism specifically to the attention component, providing significant benefits for Multi-Head Latent Attention (MLA) models.
+
+### Why DPA for MLA Models?
+
+MLA models like DeepSeek have **only one KV head**. With standard Tensor Parallelism:
+
+❌ **Problems:**
+- KV cache duplicated across all GPUs
+- Wasted memory limits batch size
+- Reduced throughput due to memory constraints
+
+✅ **DPA Solution:**
+- Each DP replica maintains its own KV cache (no duplication)
+- Memory savings enable significantly larger batch sizes
+- Each replica can be in different forward modes (prefill, decode, idle)
+- Substantially improved decoding throughput
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    8 DP Replicas (DP=8)                      │
+├────────────┬────────────┬────────────┬────────────┬─────────┤
+│   GPU 0-7  │  GPU 8-15  │ GPU 16-23  │ GPU 24-31  │   ...   │
+│   (TP=8)   │   (TP=8)   │   (TP=8)   │   (TP=8)   │         │
+├────────────┼────────────┼────────────┼────────────┼─────────┤
+│  Batch A   │  Batch B   │  Batch C   │  Batch D   │   ...   │
+│  KV for A  │  KV for B  │  KV for C  │  KV for D  │   ...   │
+│  (prefill) │  (decode)  │  (decode)  │   (idle)   │   ...   │
+└────────────┴────────────┴────────────┴────────────┴─────────┘
+                            ↓
+               All2All for Expert Parallelism (EP)
+```
+
+**Key characteristics:**
+- Each DP replica processes different batches independently
+- No KV cache duplication across replicas
+- Independent forward modes per replica
+- Combined with EP for MoE models
+
+### Supported Models
+
+**MLA (Multi-Head Latent Attention) models** - where DPA provides maximum benefit:
+- DeepSeek family (DeepSeek-V2, DeepSeek-V3, DeepSeek-R1)
+- MiniMax models
+- Kimi-K2
+- Other MLA-architecture models
+
+**Standard attention models** - also supported:
+- Qwen models (see [PR #6121](https://github.com/sgl-project/sglang/pull/6121))
+
+**Not recommended for:**
+- Llama (use standard DP or TP instead)
+- Models with standard GQA
+
+## Configuration
+
+### Standard DP with SGLang Model Gateway (Recommended)
+
+The recommended way to deploy data parallelism is using SGLang Model Gateway (SMG):
+
+```bash
+# Co-launch workers and SMG (simplest)
+python -m sglang_router.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --dp-size 2 \
+  --host 0.0.0.0 \
+  --port 30000
+```
+
+This creates 2 replicas, each using 4-way TP (8 GPUs total).
+
+**Why use SMG?**
+- Cache-aware routing (up to 92% throughput improvement)
+- Advanced load balancing policies
+- Health monitoring and circuit breakers
+- Hot worker add/remove
+- 40+ Prometheus metrics
+- Production-ready reliability
+
+See [SGLang Model Gateway documentation](https://docs.sglang.io/advanced_features/sgl_model_gateway.html) for details.
+
+### DPA for MLA Models
+
+**Basic DPA setup:**
+
+```bash
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 \
+  --dp-size 8 \
+  --enable-dp-attention
+```
+
+**Important:** Both `--dp-size > 1` and `--enable-dp-attention` are required.
+
+**DPA + EP (recommended for DeepSeek MoE):**
+
+```bash
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 \
+  --dp-size 8 \
+  --ep 8 \
+  --enable-dp-attention \
+  --moe-a2a-backend deepep \
+  --moe-runner-backend deep_gemm
+```
+
+### Multi-Node DPA
+
+```bash
+# Node 0
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 16 --dp-size 8 --ep 16 \
+  --enable-dp-attention \
+  --nnodes 2 --node-rank 0 \
+  --dist-init-addr <MASTER_NODE_IP>:29500 \
+  --moe-a2a-backend deepep \
+  --mem-fraction-static 0.8
+
+# Node 1
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 16 --dp-size 8 --ep 16 \
+  --enable-dp-attention \
+  --nnodes 2 --node-rank 1 \
+  --dist-init-addr <MASTER_NODE_IP>:29500 \
+  --moe-a2a-backend deepep \
+  --mem-fraction-static 0.8
+```
+
+## SGLang Model Gateway (SMG)
+
+SGLang Model Gateway is a production-ready Rust-based routing system for DP deployments.
+
+### Installation
+
+```bash
+pip install sglang-router
+# or
+pip install "sglang[all]"
+```
+
+### Deployment Options
+
+**Option A: Co-launch (Simplest)**
+
+```bash
+python -m sglang_router.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 --dp-size 2 \
+  --host 0.0.0.0 --port 30000
+```
+
+**Option B: Separate Launch (Multi-Node)**
+
+```bash
+# Launch workers on each node
+# Node 1
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 --port 8000
+
+# Node 2
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 --port 8000
+
+# Launch SMG
+python -m sglang_router.launch_router \
+  --worker-urls http://node1:8000 http://node2:8000 \
+  --policy cache_aware \
+  --host 0.0.0.0 --port 30000
+```
+
+**Option C: Dynamic Registration**
+
+```bash
+# Launch SMG first
+python -m sglang_router.launch_router \
+  --policy cache_aware \
+  --host 0.0.0.0 --port 30000
+
+# Register workers dynamically
+curl -X POST http://localhost:30000/workers \
+  -H "Content-Type: application/json" \
+  -d '{"url": "http://worker1:8000"}'
+
+curl -X POST http://localhost:30000/workers \
+  -H "Content-Type: application/json" \
+  -d '{"url": "http://worker2:8000"}'
+```
+
+### Load Balancing Policies
+
+| Policy | Description | Best For |
+|--------|-------------|----------|
+| `cache_aware` | Combines cache locality with load balancing | **Recommended for most workloads** |
+| `round_robin` | Cycles through workers in order | Simple, predictable distribution |
+| `random` | Random worker selection | Baseline, testing |
+| `power_of_two` | Samples two workers, picks lighter one | Low latency requirements |
+
+**Cache-aware routing (recommended):**
+
+```bash
+python -m sglang_router.launch_router \
+  --worker-urls http://worker1:8000 http://worker2:8000 \
+  --policy cache_aware \
+  --cache-threshold 0.5 \
+  --balance-abs-threshold 32 \
+  --balance-rel-threshold 1.5 \
+  --eviction-interval-secs 120 \
+  --max-tree-size 67108864
+```
+
+**How it works:**
+1. Maintains approximate radix tree per worker
+2. Routes to worker with highest prefix match
+3. Falls back to shortest-queue when imbalanced
+4. Auto-evicts old entries to prevent memory overflow
+
+**Performance:**
+- Workload with shared prefixes: +92% throughput, +275% cache hit rate
+- See [SGLang v0.4 blog](https://lmsys.org/blog/2024-12-04-sglang-v0-4/)
+
+### Recommended Production Setup
+
+```bash
+python -m sglang_router.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 --dp-size 4 \
+  --router-policy cache_aware \
+  --router-health-check-interval-secs 30 \
+  --router-prometheus-port 10001 \
+  --host 0.0.0.0 --port 30000
+```
+
+### Monitoring
+
+**Check worker status:**
+```bash
+curl http://localhost:30000/workers
+```
+
+**Check load distribution:**
+```bash
+curl http://localhost:30000/get_loads
+```
+
+**Key Prometheus metrics:**
+```
+smg_router_requests_total{model="..."}
+smg_worker_requests_active{worker="..."}
+sglang_cache_hit_rate{source="..."}
+```
+
+## Combining with Other Parallelism
+
+### DP + TP
+
+Most common combination:
+
+```bash
+python -m sglang_router.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-70B-Instruct \
+  --tp 4 \
+  --dp-size 2
+```
+
+### DPA + EP + TP (DeepSeek)
+
+Recommended for DeepSeek MoE models:
+
+```bash
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 \
+  --dp-size 8 \
+  --ep 8 \
+  --enable-dp-attention \
+  --moe-a2a-backend deepep \
+  --moe-runner-backend deep_gemm
+```
+
+This achieves up to 5× throughput improvement over vanilla TP for DeepSeek models.
+
+### Standard DP for MLA Models with SMG
+
+To use standard DP (not DPA) for MLA models:
+
+1. Launch each replica independently with DPA disabled
+2. Connect replicas to SMG for load balancing
+
+```bash
+# Worker 1
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 --port 8000
+
+# Worker 2
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 --port 8001
+
+# SMG
+python -m sglang_router.launch_router \
+  --worker-urls http://localhost:8000 http://localhost:8001 \
+  --policy cache_aware
+```
+
+## Performance Comparison
+
+### SMG vs Native DP
+
+| Feature | Native DP | SMG-Based DP |
+|---------|-----------|-------------|
+| Load Balancing | Basic in-process | Cache-aware, power-of-two |
+| Cache Awareness | ❌ No | ✅ Yes (up to +275% hit rate) |
+| Throughput | Baseline | +92% with cache-aware |
+| Multi-Node | Limited | ✅ Full support |
+| Health Monitoring | Basic | ✅ Circuit breakers, health checks |
+| Reliability | Basic | ✅ Retries, rate limiting |
+| Observability | Basic | ✅ 40+ Prometheus metrics |
+| Hot Add/Remove | ❌ No | ✅ Yes |
+
+### DPA vs Standard TP (DeepSeek)
+
+**Memory efficiency:**
+- Standard TP (tp=8): KV cache duplicated 8 times
+- DPA (dp=8): Each replica has unique KV cache
+- Result: 8× more memory for KV cache → larger batches
+
+**Throughput:**
+- DPA + EP on DeepSeek: Up to 5× improvement vs vanilla TP
+- See [Large-Scale EP Blog](https://lmsys.org/blog/2025-05-05-large-scale-ep/)
+
+## Best Practices
+
+### For Standard DP:
+
+1. **Always use SMG** instead of native DP for production
+2. **Enable cache-aware routing** for workloads with shared prefixes
+3. **Monitor cache hit rates** to validate routing effectiveness
+4. **Use health checks** to detect and remove unhealthy workers
+5. **Start with co-launch** for simplicity, then scale to separate workers
+
+### For DPA:
+
+1. **Use DPA for MLA models** (DeepSeek, MiniMax, Kimi-K2)
+2. **Combine with EP** for MoE models (DeepSeek-V3)
+3. **Set dp-size = ep-size** for optimal performance
+4. **Ensure tp % dp == 0** constraint is satisfied
+5. **Monitor per-replica utilization** to ensure balanced workload
+
+### Production Deployment:
+
+```bash
+# Recommended production setup for DeepSeek
+python -m sglang_router.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 \
+  --dp-size 8 \
+  --ep 8 \
+  --enable-dp-attention \
+  --moe-a2a-backend deepep \
+  --router-policy cache_aware \
+  --router-health-check-interval-secs 30 \
+  --router-prometheus-port 10001 \
+  --enable-two-batch-overlap \
+  --enable-eplb
+```
+
+## Troubleshooting
+
+### DPA Not Activating
+
+**Symptom:** `--enable-dp-attention` has no effect
+
+**Solution:** Ensure `--dp-size > 1`:
+```bash
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 \
+  --dp-size 8 \
+  --enable-dp-attention
+```
+
+DPA is automatically disabled when `dp-size == 1`.
+
+### TP/DP Size Constraint Error
+
+**Symptom:** "Constraint `tp_size % dp_size == 0` not satisfied"
+
+**Solution:** Ensure TP is divisible by DP:
+```bash
+# Valid: tp=8, dp=2, 4, 8
+# Invalid: tp=8, dp=3, 5, 6
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 8 \
+  --dp-size 4 \
+  --enable-dp-attention
+```
+
+### Low Cache Hit Rate with SMG
+
+**Symptom:** Low cache hit rate despite cache-aware routing
+
+**Solution:** Tune cache-aware parameters:
+```bash
+python -m sglang_router.launch_router \
+  --worker-urls http://worker1:8000 http://worker2:8000 \
+  --policy cache_aware \
+  --cache-threshold 0.3 \
+  --balance-abs-threshold 64 \
+  --eviction-interval-secs 60
+```
+
+## Configuration Summary
+
+| Parameter | Description | Default | Recommended |
+|-----------|-------------|---------|-------------|
+| `--dp-size` | Data parallel size | `1` | 2-8 |
+| `--enable-dp-attention` | Enable DPA | `False` | Enable for MLA models |
+| `--router-policy` | SMG routing policy | `round_robin` | `cache_aware` |
+| `--router-health-check-interval-secs` | Health check interval | `None` | `30` |
+| `--cache-threshold` | Cache-aware threshold | `0.5` | 0.3-0.7 |
+| `--balance-abs-threshold` | Load balance threshold | `32` | 32-64 |
+
+## When to Choose Each Strategy
+
+| Strategy | Use Case | Key Benefit |
+|----------|----------|-------------|
+| **Native DP** | Never recommended | Educational purposes only |
+| **SMG-Based DP** | Production standard DP | Cache-aware routing, reliability |
+| **DPA** | DeepSeek/MLA models | Eliminates KV cache duplication |
+| **DPA + EP** | DeepSeek MoE models | Maximum throughput (up to 5× improvement) |
+
+## Related Documentation
+
+- [SGLang Model Gateway](https://docs.sglang.io/advanced_features/sgl_model_gateway.html) - Complete SMG documentation
+- [Expert Parallelism](/distributed/expert-parallelism) - EP for MoE models
+- [Tensor Parallelism](/distributed/tensor-parallelism) - TP fundamentals
+- [Large-Scale EP Blog](https://lmsys.org/blog/2025-05-05-large-scale-ep/) - DPA+EP performance analysis
+- [SGLang v0.4 Blog](https://lmsys.org/blog/2024-12-04-sglang-v0-4/) - Cache-aware routing benchmarks

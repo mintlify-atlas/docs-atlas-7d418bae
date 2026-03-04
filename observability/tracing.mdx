@@ -1,0 +1,338 @@
+---
+title: Request Tracing
+description: Enable distributed tracing with OpenTelemetry in SGLang
+---
+
+## Overview
+
+SGLang supports distributed request tracing using OpenTelemetry. Tracing provides detailed insights into request execution flow, helping you:
+
+- Debug performance bottlenecks
+- Understand request lifecycle across components
+- Track latency breakdown by processing stage
+- Correlate requests across prefill-decode disaggregation
+- Trace requests through distributed multi-GPU systems
+
+## Prerequisites
+
+Install OpenTelemetry packages:
+
+```bash
+pip install opentelemetry-api opentelemetry-sdk \
+  opentelemetry-exporter-otlp-proto-grpc \
+  opentelemetry-exporter-otlp-proto-http
+```
+
+## Quick Start
+
+### 1. Set up an OTLP Collector
+
+You need an OpenTelemetry collector endpoint. Common options:
+
+- **Jaeger** (local development)
+- **Grafana Tempo** (production)
+- **DataDog, New Relic, Honeycomb** (managed services)
+
+#### Run Jaeger Locally
+
+```bash
+docker run -d --name jaeger \
+  -p 4317:4317 \
+  -p 16686:16686 \
+  jaegertracing/all-in-one:latest
+```
+
+Access the Jaeger UI at [http://localhost:16686](http://localhost:16686).
+
+### 2. Enable Tracing in SGLang
+
+Start the server with tracing enabled:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --enable-tracing \
+  --otlp-endpoint http://localhost:4317
+```
+
+### 3. Send Requests
+
+Send requests to generate traces:
+
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:30000/v1/chat/completions",
+    json={
+        "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "max_tokens": 128
+    }
+)
+```
+
+### 4. View Traces
+
+Open the Jaeger UI and search for traces from the "sglang server" service.
+
+## Configuration Options
+
+### Trace Levels
+
+Control tracing granularity with the `--trace-level` flag:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --enable-tracing \
+  --otlp-endpoint http://localhost:4317 \
+  --trace-level 2
+```
+
+**Trace Levels:**
+- `1`: Basic request-level tracing (root spans only)
+- `2`: Intermediate detail (major processing stages)
+- `3`: Detailed tracing (default, includes all operations)
+
+Higher levels provide more detail but increase overhead.
+
+### OTLP Protocol
+
+Choose between gRPC (default) or HTTP:
+
+**gRPC (default):**
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=grpc
+
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --enable-tracing \
+  --otlp-endpoint http://localhost:4317
+```
+
+**HTTP/Protobuf:**
+```bash
+export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/protobuf
+
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --enable-tracing \
+  --otlp-endpoint http://localhost:4318/v1/traces
+```
+
+### Batch Span Processing
+
+Optimize trace export with environment variables:
+
+```bash
+# Delay before exporting spans (milliseconds)
+export SGLANG_OTLP_EXPORTER_SCHEDULE_DELAY_MILLIS=500
+
+# Maximum spans per export batch
+export SGLANG_OTLP_EXPORTER_MAX_EXPORT_BATCH_SIZE=64
+
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --enable-tracing \
+  --otlp-endpoint http://localhost:4317
+```
+
+## Trace Structure
+
+### Span Hierarchy
+
+A typical request trace contains:
+
+1. **Root Span**: `Req {request_id}`
+   - Represents the entire request lifecycle
+   - Contains request metadata (rid, model)
+
+2. **Thread Spans**: Process-specific execution threads
+   - Example: `Scheduler [TP 0] (host:abcd1234 | pid:12345)`
+   - Labels: `tp_rank`, `host_id`, `pid`, `thread_label`
+
+3. **Slice Spans**: Specific processing stages
+   - Examples: `prefill`, `decode`, `kv_transfer`
+   - Nested to show parent-child relationships
+
+### Span Attributes
+
+Traces include standard GenAI semantic attributes:
+
+- **`gen_ai.usage.prompt_tokens`**: Number of input tokens
+- **`gen_ai.usage.completion_tokens`**: Number of output tokens
+- **`gen_ai.usage.cached_tokens`**: Number of cached tokens
+- **`gen_ai.request.max_tokens`**: Maximum tokens requested
+- **`gen_ai.request.temperature`**: Sampling temperature
+- **`gen_ai.request.top_p`**: Top-p sampling parameter
+- **`gen_ai.response.model`**: Model identifier
+- **`gen_ai.response.finish_reasons`**: Why generation stopped
+- **`gen_ai.request.id`**: Request identifier
+- **`gen_ai.latency.time_in_queue`**: Queue waiting time
+- **`gen_ai.latency.time_to_first_token`**: TTFT latency
+- **`gen_ai.latency.e2e`**: End-to-end latency
+- **`gen_ai.latency.time_in_model_prefill`**: Prefill execution time
+- **`gen_ai.latency.time_in_model_decode`**: Decode execution time
+
+### Events
+
+Spans can contain events marking specific occurrences:
+
+- Token generation milestones
+- Cache hits/misses
+- Queue admissions
+- Error conditions
+
+## Distributed Tracing
+
+### Multi-Process Tracing
+
+In multi-GPU setups (TP/PP/DP), SGLang automatically:
+
+1. Assigns unique IDs to prevent collisions across processes
+2. Labels spans with rank information (`tp_rank`, `pp_rank`, `dp_rank`)
+3. Links spans across processes using trace context propagation
+
+### Prefill-Decode Disaggregation
+
+When using PD disaggregation, traces span both workers:
+
+```
+Root Span: Req abc123
+├── Prefill Worker Thread
+│   └── prefill slice
+│       ├── bootstrap
+│       └── kv_transfer
+└── Decode Worker Thread
+    └── decode slice
+        └── generation
+```
+
+The `bootstrap_room` attribute links related requests.
+
+## Client-Side Trace Context
+
+Propagate trace context from clients using W3C Trace Context headers:
+
+```python
+import requests
+
+headers = {
+    "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    "tracestate": "congo=t61rcWkgMzE"
+}
+
+response = requests.post(
+    "http://localhost:30000/v1/chat/completions",
+    headers=headers,
+    json={...}
+)
+```
+
+SGLang will attach request spans to your trace.
+
+## Performance Considerations
+
+### Overhead
+
+Tracing introduces minimal overhead:
+- **Level 1**: &lt;1% latency impact
+- **Level 2**: ~1-2% latency impact
+- **Level 3**: ~2-5% latency impact
+
+### Sampling
+
+For high-throughput production systems, consider sampling:
+
+1. Use a tracing backend with sampling support (e.g., Tempo)
+2. Configure sampling at the collector level
+3. Sample based on trace characteristics (slow requests, errors)
+
+### Selective Tracing
+
+To trace specific requests, control tracing at the request level (requires custom implementation):
+
+```python
+# Pseudocode - requires SGLang modification
+if request.metadata.get("trace") == "true":
+    trace_context = create_trace_context()
+```
+
+## Troubleshooting
+
+### No Traces Appearing
+
+1. **Verify OpenTelemetry is installed:**
+   ```bash
+   python -c "import opentelemetry; print('OK')"
+   ```
+
+2. **Check OTLP endpoint connectivity:**
+   ```bash
+   curl http://localhost:4317
+   ```
+
+3. **Review SGLang logs for errors:**
+   ```bash
+   grep -i "tracing\|opentelemetry" sglang.log
+   ```
+
+4. **Verify protocol configuration:**
+   - gRPC: Port 4317 (default)
+   - HTTP: Port 4318 with `/v1/traces` path
+
+### High Memory Usage
+
+- Reduce `SGLANG_OTLP_EXPORTER_MAX_EXPORT_BATCH_SIZE`
+- Decrease `SGLANG_OTLP_EXPORTER_SCHEDULE_DELAY_MILLIS`
+- Lower `--trace-level`
+
+### Trace ID Collisions
+
+SGLang uses a custom ID generator to prevent collisions across processes. If you still see issues:
+
+1. Ensure each process has a unique host identifier
+2. Check that `/etc/machine-id` exists and is unique
+3. Verify MAC addresses differ across machines
+
+## Integration Examples
+
+### Grafana Tempo
+
+```bash
+# docker-compose.yml
+version: '3'
+services:
+  tempo:
+    image: grafana/tempo:latest
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "4317:4317"  # OTLP gRPC
+      - "3200:3200"  # Tempo UI
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+```
+
+### DataDog
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --enable-tracing \
+  --otlp-endpoint http://localhost:4317
+
+# Configure DataDog Agent to receive OTLP
+# See: https://docs.datadoghq.com/tracing/trace_collection/open_standards/otlp_ingest_in_the_agent/
+```
+
+## Next Steps
+
+- Explore [monitoring](/observability/monitoring) for real-time metrics
+- Review available [Prometheus metrics](/observability/metrics)
+- Run [benchmarks](/observability/benchmarking) to establish baselines

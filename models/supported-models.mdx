@@ -1,0 +1,128 @@
+---
+title: Supported Models
+description: Comprehensive list of models supported by SGLang
+---
+
+SGLang supports a wide range of models across different categories, including large language models (LLMs), multimodal models, and specialized models for specific tasks.
+
+## Model Categories
+
+SGLang organizes supported models into the following categories:
+
+- **[Large Language Models](#large-language-models)** - Text-to-text generation models
+- **[Multimodal Models](multimodal)** - Models that process images, video, and audio
+- **Popular Model Families**:
+  - **[Llama Models](llama)** - Meta's open-source LLM series
+  - **[Qwen Models](qwen)** - Alibaba's language and multimodal models
+  - **[DeepSeek Models](deepseek)** - Advanced reasoning-optimized models
+
+## Large Language Models
+
+These models accept text input and produce text output. Many feature mixture-of-experts (MoE) architectures for improved scaling and efficiency.
+
+### Example Launch Command
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.2-1B-Instruct \
+  --host 0.0.0.0 \
+  --port 30000
+```
+
+### Supported Model Families
+
+#### Leading Open Models
+
+| Model Family | Example Model | Parameters | Key Features |
+|--------------|---------------|------------|-------------|
+| **DeepSeek** | `deepseek-ai/DeepSeek-R1` | Up to 671B (MoE) | Advanced reasoning with RL, MLA attention. [Optimized for SGLang](deepseek) |
+| **Kimi K2** | `moonshotai/Kimi-K2-Instruct` | 1T total, 32B active | 128K-256K context, agentic intelligence, INT4 quantization |
+| **GPT-OSS** | `openai/gpt-oss-120b` | 20B, 120B | OpenAI's latest for complex reasoning and agentic tasks |
+| **Qwen** | `Qwen/Qwen3.5-397B-A17B` | 0.6B to 397B | Hybrid attention, MoE variants. [Optimized for SGLang](qwen) |
+| **Llama** | `meta-llama/Llama-4-Scout-17B-16E-Instruct` | 7B to 400B | Meta's flagship open models. [Optimized for SGLang](llama) |
+
+#### Enterprise & Research Models
+
+| Model Family | Example Model | Parameters | Key Features |
+|--------------|---------------|------------|-------------|
+| **Mistral/Mixtral** | `mistralai/Mistral-7B-Instruct-v0.2` | 7B to 8x22B (MoE) | High-quality open models with MoE variants |
+| **Gemma** | `google/gemma-3-1b-it` | 1B to 27B | Google's efficient multilingual models, 128K context |
+| **Phi** | `microsoft/Phi-4-multimodal-instruct` | 1.3B to 5.6B | Microsoft's compact high-performance models |
+| **MiniCPM** | `openbmb/MiniCPM3-4B` | 4B | Edge-optimized, GPT-3.5-level performance |
+| **OLMo/OLMoE** | `allenai/OLMo-3-1125-32B` | 7B to 32B | Allen AI's fully open language models |
+| **Granite** | `ibm-granite/granite-3.1-8b-instruct` | 8B+ | IBM's enterprise-focused models |
+| **Grok** | `xai-org/grok-1` | 314B | xAI's large-scale model |
+| **Command-R/A** | `CohereLabs/c4ai-command-r-v01` | Various | Cohere's RAG and tool-use optimized models |
+
+#### Specialized & Regional Models
+
+| Model Family | Region/Focus | Example Model |
+|--------------|--------------|---------------|
+| **ChatGLM/GLM-4** | Chinese/English | `THUDM/chatglm2-6b`, `ZhipuAI/glm-4-9b-chat` |
+| **InternLM 2** | Multilingual | `internlm/internlm2-7b` (200K context) |
+| **ExaONE 3** | Korean/English | `LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct` |
+| **Baichuan 2** | Chinese/English | `baichuan-inc/Baichuan2-13B-Chat` |
+| **ERNIE-4.5** | Chinese/Multilingual | `baidu/ERNIE-4.5-21B-A3B-PT` (MoE) |
+| **Hunyuan-Large** | Multilingual | `tencent/Tencent-Hunyuan-Large` (389B MoE) |
+| **Orion** | Multilingual | `OrionStarAI/Orion-14B-Base` |
+
+#### Compact & Edge Models
+
+| Model Family | Parameters | Key Features |
+|--------------|------------|-------------|
+| **SmolLM** | 135M-1.7B | Ultra-small for mobile/edge devices |
+| **MiniMax-M2** | Various | SOTA for coding & agentic workflows |
+| **Arcee AFM** | 4.5B | Real-world reliability, edge deployment |
+| **Trinity** | Various | Arcee's MoE family |
+
+#### Architecture Innovations
+
+| Model Family | Innovation | Example Model |
+|--------------|------------|---------------|
+| **Kimi Linear** | Hybrid linear attention (6× faster) | `moonshotai/Kimi-Linear-48B-A3B-Instruct` |
+| **Falcon-H1** | Hybrid Mamba-Transformer | `tiiuae/Falcon-H1-34B-Instruct` |
+| **Nemotron Nano** | Hybrid Mamba-Transformer | `nvidia/NVIDIA-Nemotron-Nano-9B-v2` |
+| **MiMo** | Multiple-Token Prediction | `XiaomiMiMo/MiMo-7B-RL` |
+
+### Additional Supported Models
+
+SGLang also supports many other model architectures including:
+
+- **XVERSE MoE** - 255B total, 36B active parameters
+- **DBRX** - Databricks' 132B MoE model
+- **Llama Nemotron** - NVIDIA's enterprise AI agents (up to 253B)
+- **StarCoder2** - Code generation models (3B-15B)
+- **Jet-Nemotron** - Hybrid architecture language models
+- **StableLM** - StabilityAI's 3B-7B models
+- **GPT-J/GPT-2/GPT-BigCode** - EleutherAI and compatibility models
+- **Persimmon** - Adept's 8B chat model
+- **Solar** - Upstage's 10.7B instruction model
+- **Tele FLM** - BAAI's 52B-1T multilingual model
+- **Ling** - InclusionAI's 16.8B-290B MoE models
+
+## Finding Model Architectures
+
+To check if a specific model architecture is supported, search GitHub with:
+
+```
+repo:sgl-project/sglang path:/^python\/sglang\/srt\/models\// YourModelArchitecture
+```
+
+For example, to search for `Qwen3ForCausalLM`:
+
+```
+repo:sgl-project/sglang path:/^python\/sglang\/srt\/models\// Qwen3ForCausalLM
+```
+
+## Model-Specific Documentation
+
+For detailed usage instructions and optimizations for specific models, see:
+
+- [Llama Models](llama) - Launch commands, benchmarks, EAGLE decoding
+- [Qwen Models](qwen) - Configuration tips, MoE, reasoning
+- [DeepSeek Models](deepseek) - MLA optimizations, multi-node deployment
+- [Multimodal Models](multimodal) - Vision, audio, video support
+
+## Total Supported Architectures
+
+SGLang currently supports **166+ model architectures** out of the box, with continuous additions in each release.

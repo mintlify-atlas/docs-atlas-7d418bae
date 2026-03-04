@@ -1,0 +1,374 @@
+---
+title: sglang generate
+description: Run inference on a multimodal diffusion model
+---
+
+## Overview
+
+The `sglang generate` command runs inference on multimodal diffusion models. This command is currently supported only for diffusion models and provides a convenient way to generate images, videos, or other outputs without starting a server.
+
+## Basic Usage
+
+```bash
+sglang generate --model-path <model-name-or-path> --prompt "your prompt" [options]
+```
+
+Alternatively, you can use a configuration file:
+
+```bash
+sglang generate --config config.json
+```
+
+## Required Arguments
+
+<ParamField path="--model-path" type="string" required>
+  Path or name of the diffusion model to use. Can be:
+  - HuggingFace model ID (e.g., `stabilityai/stable-diffusion-xl-base-1.0`)
+  - Local path to model directory
+  - ModelScope model ID (when using `SGLANG_USE_MODELSCOPE=1`)
+</ParamField>
+
+<ParamField path="--prompt" type="string" required>
+  Text prompt describing what to generate.
+</ParamField>
+
+## Model Configuration
+
+<ParamField path="--config" type="string">
+  Path to a JSON or YAML configuration file containing model and generation parameters. When provided, `--model-path` and `--prompt` become optional.
+</ParamField>
+
+<ParamField path="--model-id" type="string">
+  Explicit model ID override (e.g., "Qwen-Image").
+</ParamField>
+
+<ParamField path="--backend" type="string" default="auto">
+  Model backend to use. Options:
+  - `auto`: Automatically select backend (prefer sglang native, fallback to diffusers)
+  - `sglang`: Use sglang's native optimized implementation
+  - `diffusers`: Use vanilla diffusers pipeline (supports all diffusers models)
+</ParamField>
+
+<ParamField path="--trust-remote-code" type="boolean" default="false">
+  Trust remote code from HuggingFace.
+</ParamField>
+
+<ParamField path="--revision" type="string">
+  Model revision (branch/tag name or commit ID).
+</ParamField>
+
+## Sampling Parameters
+
+### Generation Settings
+
+<ParamField path="--negative-prompt" type="string">
+  Negative prompt to guide what not to generate.
+</ParamField>
+
+<ParamField path="--num-inference-steps" type="integer" default="50">
+  Number of denoising steps. More steps generally produce higher quality but take longer.
+</ParamField>
+
+<ParamField path="--guidance-scale" type="float" default="7.5">
+  Guidance scale for classifier-free guidance. Higher values follow the prompt more closely.
+</ParamField>
+
+<ParamField path="--height" type="integer">
+  Output height in pixels.
+</ParamField>
+
+<ParamField path="--width" type="integer">
+  Output width in pixels.
+</ParamField>
+
+<ParamField path="--seed" type="integer">
+  Random seed for reproducibility.
+</ParamField>
+
+### Batch Generation
+
+<ParamField path="--num-samples" type="integer" default="1">
+  Number of samples to generate.
+</ParamField>
+
+## Parallelism Options
+
+<ParamField path="--num-gpus" type="integer" default="1">
+  Number of GPUs to use for inference.
+</ParamField>
+
+<ParamField path="--tp-size" type="integer">
+  Tensor parallelism size.
+</ParamField>
+
+<ParamField path="--sp-degree" type="integer">
+  Sequence parallelism degree.
+</ParamField>
+
+<ParamField path="--ulysses-degree" type="integer">
+  Ulysses sequence parallelism degree for long sequences.
+</ParamField>
+
+<ParamField path="--ring-degree" type="integer">
+  Ring sequence parallelism degree.
+</ParamField>
+
+<ParamField path="--dp-size" type="integer" default="1">
+  Data parallelism size (number of data parallel groups).
+</ParamField>
+
+<ParamField path="--dp-degree" type="integer" default="1">
+  Number of GPUs in a data parallel group.
+</ParamField>
+
+<ParamField path="--enable-cfg-parallel" type="boolean" default="false">
+  Enable classifier-free guidance parallelism.
+</ParamField>
+
+## Attention Backend
+
+<ParamField path="--attention-backend" type="string">
+  Attention backend to use for the model.
+</ParamField>
+
+<ParamField path="--attention-backend-config" type="string">
+  Additional configuration for the attention backend (JSON format).
+</ParamField>
+
+<ParamField path="--cache-dit-config" type="string">
+  Cache-DIT configuration for diffusers backend.
+</ParamField>
+
+## CPU Offloading
+
+<ParamField path="--dit-cpu-offload" type="boolean">
+  Offload DiT (Diffusion Transformer) model to CPU to save GPU memory.
+</ParamField>
+
+<ParamField path="--dit-layerwise-offload" type="boolean">
+  Enable layer-wise offloading for DiT model.
+</ParamField>
+
+<ParamField path="--text-encoder-cpu-offload" type="boolean">
+  Offload text encoder to CPU.
+</ParamField>
+
+<ParamField path="--image-encoder-cpu-offload" type="boolean">
+  Offload image encoder to CPU.
+</ParamField>
+
+<ParamField path="--vae-cpu-offload" type="boolean">
+  Offload VAE (Variational AutoEncoder) to CPU.
+</ParamField>
+
+## LoRA Adapters
+
+<ParamField path="--lora-path" type="string">
+  Path to LoRA adapter weights.
+</ParamField>
+
+<ParamField path="--lora-nickname" type="string" default="default">
+  Nickname for the LoRA adapter (for swapping adapters in the pipeline).
+</ParamField>
+
+<ParamField path="--lora-scale" type="float" default="1.0">
+  LoRA scale for merging (e.g., 0.125 for Hyper-SD).
+</ParamField>
+
+<ParamField path="--lora-target-modules" type="string">
+  List of module names to apply LoRA to (e.g., "q_proj,k_proj").
+</ParamField>
+
+## Quantization
+
+<ParamField path="--transformer-weights-path" type="string">
+  Path to pre-quantized transformer weights (single .safetensors file or directory).
+</ParamField>
+
+<ParamField path="--nunchaku-config" type="string">
+  Nunchaku SVDQuant configuration for model quantization.
+</ParamField>
+
+## Performance Options
+
+<ParamField path="--enable-torch-compile" type="boolean" default="false">
+  Enable PyTorch compilation for faster inference.
+</ParamField>
+
+<ParamField path="--warmup" type="boolean" default="false">
+  Run warmup iterations before generation.
+</ParamField>
+
+<ParamField path="--warmup-steps" type="integer" default="1">
+  Number of warmup steps to run.
+</ParamField>
+
+<ParamField path="--disable-autocast" type="boolean">
+  Disable automatic mixed precision.
+</ParamField>
+
+## Output Options
+
+<ParamField path="--output-path" type="string" default="outputs/">
+  Directory path to save generated outputs.
+</ParamField>
+
+<ParamField path="--perf-dump-path" type="string">
+  Path to dump performance metrics (JSON) for the run.
+</ParamField>
+
+## Advanced Options
+
+<ParamField path="--diffusers-kwargs" type="string">
+  Additional keyword arguments to pass to the diffusers pipeline (JSON format).
+  
+  Example: `--diffusers-kwargs '{"eta": 0.5, "use_karras_sigmas": true}'`
+</ParamField>
+
+<ParamField path="--component-paths" type="string">
+  Override paths for specific pipeline components (JSON format).
+  
+  Example: `--component-paths '{"vae": "path/to/custom/vae"}'`
+</ParamField>
+
+<ParamField path="--pipeline-class-name" type="string">
+  Override the pipeline class from model_index.json.
+</ParamField>
+
+## Examples
+
+### Basic Image Generation
+
+```bash
+sglang generate \
+  --model-path stabilityai/stable-diffusion-xl-base-1.0 \
+  --prompt "A serene landscape with mountains and a lake at sunset"
+```
+
+### High-Quality Generation with Custom Settings
+
+```bash
+sglang generate \
+  --model-path stabilityai/stable-diffusion-xl-base-1.0 \
+  --prompt "A futuristic city with flying cars" \
+  --negative-prompt "blurry, low quality, distorted" \
+  --num-inference-steps 100 \
+  --guidance-scale 9.0 \
+  --height 1024 \
+  --width 1024 \
+  --seed 42
+```
+
+### Multi-GPU Inference
+
+```bash
+sglang generate \
+  --model-path stabilityai/stable-diffusion-xl-base-1.0 \
+  --prompt "A beautiful forest scene" \
+  --num-gpus 4 \
+  --sp-degree 2 \
+  --tp-size 2
+```
+
+### Batch Generation
+
+```bash
+sglang generate \
+  --model-path stabilityai/stable-diffusion-xl-base-1.0 \
+  --prompt "Abstract art with vibrant colors" \
+  --num-samples 4 \
+  --seed 42
+```
+
+### Using LoRA Adapters
+
+```bash
+sglang generate \
+  --model-path stabilityai/stable-diffusion-xl-base-1.0 \
+  --prompt "Anime style character portrait" \
+  --lora-path path/to/anime-lora \
+  --lora-scale 0.8
+```
+
+### CPU Offloading for Large Models
+
+```bash
+sglang generate \
+  --model-path stabilityai/stable-diffusion-xl-base-1.0 \
+  --prompt "A detailed photograph of nature" \
+  --dit-cpu-offload \
+  --vae-cpu-offload \
+  --text-encoder-cpu-offload
+```
+
+### Using Configuration File
+
+Create a config file `generation_config.json`:
+
+```json
+{
+  "model_path": "stabilityai/stable-diffusion-xl-base-1.0",
+  "prompt": "A majestic dragon flying over mountains",
+  "negative_prompt": "blurry, low quality",
+  "num_inference_steps": 50,
+  "guidance_scale": 7.5,
+  "height": 1024,
+  "width": 1024,
+  "seed": 12345,
+  "num_samples": 2
+}
+```
+
+Then run:
+
+```bash
+sglang generate --config generation_config.json
+```
+
+### Performance Benchmarking
+
+```bash
+sglang generate \
+  --model-path stabilityai/stable-diffusion-xl-base-1.0 \
+  --prompt "Test image" \
+  --perf-dump-path performance_metrics.json \
+  --warmup \
+  --warmup-steps 3
+```
+
+## Output
+
+Generated outputs are saved to the specified output directory (default: `outputs/`). The command will display generation progress and save:
+
+- Generated images/videos in the output directory
+- Performance metrics (if `--perf-dump-path` is specified)
+
+Example output:
+
+```
+INFO: Loading model: stabilityai/stable-diffusion-xl-base-1.0
+INFO: Model loaded successfully
+INFO: Generating with prompt: "A serene landscape..."
+INFO: Progress: 100% [50/50 steps]
+INFO: Generated image saved to: outputs/generated_image_0.png
+INFO: Total generation time: 3.45s
+```
+
+## Limitations
+
+<Warning>
+The `generate` command is currently only supported for diffusion models. For language models, use the [sglang serve](/api/cli/serve) command to start a server and make API requests.
+</Warning>
+
+## Help
+
+To see all available options:
+
+```bash
+sglang generate --help
+```
+
+## Related Commands
+
+- [sglang serve](/api/cli/serve) - Launch the SGLang server
+- [sglang version](/api/cli/version) - Show version information

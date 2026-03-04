@@ -1,0 +1,293 @@
+---
+title: Migration Guide
+description: Guide for migrating between SGLang versions
+---
+
+This guide helps you migrate between major versions of SGLang and understand breaking changes.
+
+## Overview
+
+SGLang follows semantic versioning (MAJOR.MINOR.PATCH):
+- **Major versions**: Breaking changes that require code modifications
+- **Minor versions**: New features with backward compatibility
+- **Patch versions**: Bug fixes with backward compatibility
+
+## Migrating to v0.5.x
+
+### Environment Variables
+
+Several environment variables have been deprecated in favor of CLI flags:
+
+<Warning>
+These environment variables will be removed in v0.5.7+. Migrate to CLI flags.
+</Warning>
+
+| Deprecated Env Var | Replacement CLI Flag |
+|-------------------|----------------------|
+| `SGLANG_ENABLE_FLASHINFER_FP8_GEMM` | `--fp8-gemm-backend=flashinfer_trtllm` |
+| `SGLANG_ENABLE_FLASHINFER_GEMM` | `--fp8-gemm-backend=flashinfer_trtllm` |
+| `SGLANG_SUPPORT_CUTLASS_BLOCK_FP8` | `--fp8-gemm-backend=cutlass` |
+| `SGLANG_FLASHINFER_FP4_GEMM_BACKEND` | `--fp4-gemm-backend` |
+| `SGLANG_SCHEDULER_DECREASE_PREFILL_IDLE` | `--enable-prefill-delayer` |
+| `SGLANG_PREFILL_DELAYER_MAX_DELAY_PASSES` | `--prefill-delayer-max-delay-passes` |
+| `SGLANG_PREFILL_DELAYER_TOKEN_USAGE_LOW_WATERMARK` | `--prefill-delayer-token-usage-low-watermark` |
+
+**Before:**
+```bash
+export SGLANG_ENABLE_FLASHINFER_FP8_GEMM=true
+python -m sglang.launch_server --model-path meta-llama/Llama-3.1-8B-Instruct
+```
+
+**After:**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --fp8-gemm-backend flashinfer_trtllm
+```
+
+### Timeout Configuration
+
+Timeout environment variables have changed from milliseconds to seconds:
+
+| Old (milliseconds) | New (seconds) |
+|-------------------|---------------|
+| `SGLANG_QUEUED_TIMEOUT_MS` | `SGLANG_REQ_WAITING_TIMEOUT` |
+| `SGLANG_FORWARD_TIMEOUT_MS` | `SGLANG_REQ_RUNNING_TIMEOUT` |
+
+**Before:**
+```bash
+export SGLANG_QUEUED_TIMEOUT_MS=300000  # 5 minutes in ms
+```
+
+**After:**
+```bash
+export SGLANG_REQ_WAITING_TIMEOUT=300  # 5 minutes in seconds
+```
+
+### Prefix Migration: SGL_ to SGLANG_
+
+All `SGL_` prefixed environment variables are deprecated in favor of `SGLANG_`:
+
+**Before:**
+```bash
+export SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=true
+```
+
+**After:**
+```bash
+export SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK=false
+```
+
+<Note>
+The old `SGL_` prefix still works but will show deprecation warnings.
+</Note>
+
+## Migrating to v0.4.x
+
+### Deterministic Inference
+
+A new deterministic inference mode was introduced. If you need reproducible results:
+
+**Before (v0.3.x):**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --disable-radix-cache
+```
+
+**After (v0.4.x):**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --enable-deterministic-inference
+```
+
+See the [blog post](https://lmsys.org/blog/2025-09-22-sglang-deterministic/) for details.
+
+### MoE Backend Changes
+
+The `SGLANG_CUTLASS_MOE` environment variable is deprecated:
+
+**Before:**
+```bash
+export SGLANG_CUTLASS_MOE=true
+python -m sglang.launch_server --model-path deepseek-ai/DeepSeek-V3
+```
+
+**After:**
+```bash
+python -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --moe-runner-backend cutlass
+```
+
+## Migrating from Other Frameworks
+
+### From vLLM
+
+SGLang provides a similar API to vLLM with enhanced performance:
+
+**vLLM:**
+```python
+from vllm import LLM, SamplingParams
+
+llm = LLM(model="meta-llama/Llama-3.1-8B-Instruct")
+outputs = llm.generate(
+    ["Tell me a joke"],
+    SamplingParams(temperature=0.7, max_tokens=100)
+)
+```
+
+**SGLang:**
+```python
+import sglang as sgl
+
+llm = sgl.Engine(model_path="meta-llama/Llama-3.1-8B-Instruct")
+outputs = llm.generate(
+    ["Tell me a joke"],
+    sgl.SamplingParams(temperature=0.7, max_tokens=100)
+)
+```
+
+### Key Differences from vLLM
+
+1. **Prefix Caching**: SGLang uses RadixAttention by default (more efficient)
+2. **Chunked Prefill**: Different default chunk sizes
+3. **Memory Management**: Different memory fraction defaults
+4. **API Compatibility**: SGLang is OpenAI-compatible but has additional features
+
+### From Text Generation Inference (TGI)
+
+TGI uses a Docker-based approach, while SGLang can run directly:
+
+**TGI:**
+```bash
+docker run --gpus all \
+  -p 8080:80 \
+  ghcr.io/huggingface/text-generation-inference:latest \
+  --model-id meta-llama/Llama-3.1-8B-Instruct
+```
+
+**SGLang:**
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --port 8080
+```
+
+### From LiteLLM
+
+LiteLLM is a proxy/router, while SGLang is an inference engine. You can use LiteLLM with SGLang:
+
+```python
+import litellm
+
+# Point LiteLLM to SGLang endpoint
+response = litellm.completion(
+    model="openai/meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Hello"}],
+    api_base="http://localhost:30000/v1"
+)
+```
+
+## Breaking Changes by Version
+
+### v0.5.0
+
+- Environment variable prefix changes (`SGL_` → `SGLANG_`)
+- Timeout units changed from milliseconds to seconds
+- Several FP8/quantization env vars deprecated for CLI flags
+- Memory pool configuration changes
+
+### v0.4.0
+
+- Introduction of deterministic inference mode
+- MoE backend configuration moved to CLI flags
+- FlashInfer becomes the default attention backend
+- Changes to RadixAttention cache behavior
+
+### v0.3.0
+
+- Initial support for DeepSeek V3
+- New multi-node deployment options
+- Changes to expert parallelism configuration
+
+## Best Practices for Migration
+
+### 1. Test in Staging First
+
+Always test new versions in a staging environment before production deployment.
+
+### 2. Review Deprecation Warnings
+
+Pay attention to deprecation warnings in logs:
+
+```bash
+python -m sglang.launch_server --model-path YOUR_MODEL 2>&1 | grep -i "deprecat"
+```
+
+### 3. Pin Versions in Production
+
+Use specific versions in your requirements:
+
+```txt
+sglang==0.5.6  # Not sglang>=0.5.0
+```
+
+### 4. Check Release Notes
+
+Always review [release notes](https://github.com/sgl-project/sglang/releases) before upgrading.
+
+### 5. Update Configuration Files
+
+If you use configuration files, update them according to the new format:
+
+```python
+# config.py - Before
+config = {
+    "env": {
+        "SGLANG_ENABLE_FLASHINFER_FP8_GEMM": "true"
+    }
+}
+
+# config.py - After
+config = {
+    "args": [
+        "--fp8-gemm-backend", "flashinfer_trtllm"
+    ]
+}
+```
+
+### 6. Monitor Performance
+
+After migration, monitor key metrics:
+- Throughput (requests/second)
+- Latency (p50, p95, p99)
+- GPU memory usage
+- Error rates
+
+See [Observability](/advanced-features/observability) for monitoring setup.
+
+## Backward Compatibility
+
+SGLang maintains backward compatibility within minor versions:
+
+- **0.5.0 → 0.5.6**: Fully compatible
+- **0.4.x → 0.5.x**: Deprecation warnings, but works
+- **0.3.x → 0.5.x**: May require configuration updates
+
+## Getting Help with Migration
+
+If you encounter issues during migration:
+
+1. **Check migration issues**: Search [GitHub Issues](https://github.com/sgl-project/sglang/issues) with label `migration`
+2. **Ask in Slack**: Join https://slack.sglang.io/ and ask in #general or #help
+3. **Consult documentation**: Check version-specific docs
+4. **Report problems**: File an issue with your migration scenario
+
+## See Also
+
+- [Environment Variables](/resources/environment-variables) - Full configuration reference
+- [Server Arguments](/advanced-features/server-arguments) - CLI options
+- [Troubleshooting](/resources/troubleshooting) - Common issues and solutions
+- [Release Notes](https://github.com/sgl-project/sglang/releases) - Detailed changelogs

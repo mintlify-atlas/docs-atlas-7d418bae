@@ -1,0 +1,479 @@
+---
+title: DeepSeek Models
+description: Usage guide for DeepSeek's advanced reasoning models in SGLang
+---
+
+DeepSeek is a series of advanced reasoning-optimized models featuring Multi-head Latent Attention (MLA) and Mixture-of-Experts (MoE) architectures. SGLang provides extensive optimizations specifically designed for DeepSeek models.
+
+<Info>
+SGLang is the **official recommended inference engine** by the [DeepSeek team](https://github.com/deepseek-ai/DeepSeek-V3/tree/main?tab=readme-ov-file#62-inference-with-sglang-recommended) for DeepSeek-V3/R1.
+</Info>
+
+## Overview
+
+### Supported DeepSeek Models
+
+- **DeepSeek R1** (0528, 0730) - Latest reasoning models with RL
+- **DeepSeek V3.1/V3** - 671B MoE (37B active) with MLA
+- **DeepSeek V2** - Previous generation MLA+MoE
+- **DeepSeek-VL2** - Vision-language model
+- **DeepSeek-OCR / OCR-2** - Document understanding
+- **DeepSeek-Janus-Pro** - Image understanding & generation
+
+### Key Features
+
+- **Multi-head Latent Attention (MLA)**: Compressed KV cache for efficiency
+- **Mixture-of-Experts (MoE)**: 671B total, 37B active parameters
+- **FP8 Native**: Official models already in FP8 format
+- **Advanced Reasoning**: Trained with reinforcement learning
+
+## Quick Start
+
+### Single Node (8×H200)
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --tp 8 \
+  --trust-remote-code
+```
+
+### Multi-Node Example (2×8 H100)
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --tp 16 \
+  --trust-remote-code
+```
+
+## Hardware Requirements
+
+Recommended configurations for DeepSeek V3/R1:
+
+| Weight Type | Hardware Configuration |
+|-------------|------------------------|
+| **FP8** (recommended) | 8×H200 |
+| | 8×B200 |
+| | 8×MI300X |
+| | 2×8×H100/H800/H20 |
+| | Xeon 6980P CPU |
+| **BF16** (upcast) | 2×8×H200 |
+| | 2×8×MI300X |
+| | 4×8×H100/H800/H20 |
+| | 4×8×A100/A800 |
+| **INT8 Quantized** | 16×A100/A800 |
+| | 32×L40S |
+| | 4×Atlas 800I A3 |
+| **W4A8 Quantized** | 8×H20/H100, 4×H200 |
+| **AWQ Quantized** | 8×H100/H800/H20 |
+| | 8×A100/A800 |
+| **MXFP4** | 8×MI355X/350X, 4×MI355X/350X |
+| **NVFP4** | 8×B200, 4×B200 |
+
+<Warning>
+The official DeepSeek V3/R1 models are already in FP8 format. Do NOT use `--quantization fp8` when loading them.
+</Warning>
+
+## SGLang Optimizations for DeepSeek
+
+SGLang provides several model-specific optimizations:
+
+### 1. Multi-head Latent Attention (MLA)
+
+**Description**: MLA compresses KV cache for improved efficiency. SGLang implements:
+
+- **Weight Absorption**: Reordered computation for balanced memory access
+- **Multiple MLA Backends**: FlashAttention3, Flashinfer, FlashMLA, CutlassMLA, TRTLLM MLA (Blackwell), Triton
+- **FP8 Quantization**: W8A8 FP8 and KV Cache FP8
+- **CUDA Graph & Torch.compile**: Reduced latency for small batches
+- **Chunked Prefix Cache**: Long sequence optimization (FlashAttention3 only)
+
+Achieved **up to 7× acceleration** in output throughput.
+
+**Usage**: MLA optimization is enabled by default.
+
+### 2. Data Parallelism Attention (DP Attention)
+
+**Description**: Reduces KV cache size by distributing attention across DP workers, enabling larger batch sizes. KV cache is stored per DP rank instead of duplicating across all TP ranks.
+
+**Performance**: Up to **1.9× throughput improvement** in high batch size scenarios.
+
+**Usage**:
+
+```bash
+# Single node with DP attention
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --enable-dp-attention \
+  --tp 8 \
+  --dp 8 \
+  --trust-remote-code
+
+# Multi-node: 2 nodes, 8 H100 each
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --enable-dp-attention \
+  --tp 16 \
+  --dp 2 \
+  --trust-remote-code
+```
+
+<Warning>
+DP attention is optimized for high-throughput scenarios with large batch sizes. Not recommended for low-latency, small-batch use cases.
+</Warning>
+
+### 3. Block-wise FP8 Quantization
+
+**Description**: Optimized FP8 quantization with:
+
+- **Activation**: E4M3 format with per-token-per-128-channel sub-vector scales
+- **Weight**: Per-128×128-block quantization for numerical stability
+- **DeepGEMM**: Kernel library optimized for FP8 matrix multiplications
+
+**Usage**: Enabled by default on Hopper/Blackwell GPUs.
+
+To precompile DeepGEMM kernels (recommended, ~10 minutes):
+
+```bash
+python3 -m sglang.compile_deep_gemm \
+  --model deepseek-ai/DeepSeek-V3 \
+  --tp 8 \
+  --trust-remote-code
+```
+
+To disable DeepGEMM:
+
+```bash
+SGLANG_ENABLE_JIT_DEEPGEMM=0 python3 -m sglang.launch_server ...
+```
+
+### 4. Multi-token Prediction (MTP)
+
+**Description**: EAGLE-based speculative decoding for DeepSeek models.
+
+**Performance**: 
+- **1.8× speedup** for batch size 1
+- **1.5× speedup** for batch size 32
+
+**Usage**:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3-0324 \
+  --speculative-algorithm EAGLE \
+  --trust-remote-code \
+  --tp 8
+```
+
+**Optional parameters** (defaults shown):
+
+```bash
+--speculative-num-steps 3 \
+--speculative-eagle-topk 1 \
+--speculative-num-draft-tokens 4
+```
+
+For large batch sizes (>48), adjust:
+
+```bash
+--max-running-requests 64 \  # Increase from default 48
+--cuda-graph-bs 1,2,4,8,16,32,64  # Customize CUDA graph batch sizes
+```
+
+<Tip>
+Enable experimental overlap scheduler with `SGLANG_ENABLE_SPEC_V2=1` for improved performance.
+</Tip>
+
+### 5. Multi-Node Tensor Parallelism
+
+Deploy DeepSeek across multiple nodes for models that don't fit in single-node memory.
+
+**Examples**:
+
+- [2×H20*8 nodes](https://github.com/sgl-project/sglang/tree/main/benchmark/deepseek_v3#example-serving-with-two-h208-nodes)
+- [2×H200*8 nodes with Docker](https://github.com/sgl-project/sglang/tree/main/benchmark/deepseek_v3#example-serving-with-two-h2008-nodes-and-docker)
+- [4×A100*8 nodes](https://github.com/sgl-project/sglang/tree/main/benchmark/deepseek_v3#example-serving-with-four-a1008-nodes)
+- [GB200 NVL72 with PD and EP](https://lmsys.org/blog/2025-06-16-gb200-part-1/)
+- [96 H100 GPUs with PD disaggregation](https://lmsys.org/blog/2025-05-05-deepseek-pd-ep/)
+
+## Reasoning Content (DeepSeek R1 & V3.1)
+
+DeepSeek R1 and V3.1 models can separate reasoning tokens from final answers.
+
+### Enable Reasoning Parser
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --tp 8 \
+  --reasoning-parser deepseek-r1 \
+  --trust-remote-code
+```
+
+### Using Reasoning in Requests
+
+```python
+import openai
+
+client = openai.Client(base_url="http://localhost:30000/v1", api_key="-")
+
+response = client.chat.completions.create(
+    model="deepseek-ai/DeepSeek-R1",
+    messages=[{"role": "user", "content": "Solve: 2x + 5 = 13"}],
+    max_tokens=1024
+)
+
+# Access reasoning separately
+print("Reasoning:", response.choices[0].message.reasoning_content)
+print("Answer:", response.choices[0].message.content)
+```
+
+### Thinking Budget
+
+Control reasoning token budget with custom logit processors:
+
+```bash
+python3 -m sglang.launch_server \
+  --model deepseek-ai/DeepSeek-R1 \
+  --tp 8 \
+  --reasoning-parser deepseek-r1 \
+  --enable-custom-logit-processor
+```
+
+```python
+import openai
+from sglang.srt.sampling.custom_logit_processor import DeepSeekR1ThinkingBudgetLogitProcessor
+
+client = openai.Client(base_url="http://127.0.0.1:30000/v1", api_key="*")
+
+response = client.chat.completions.create(
+    model="deepseek-ai/DeepSeek-R1",
+    messages=[{"role": "user", "content": "Question: Is Paris the capital of France?"}],
+    max_tokens=1024,
+    extra_body={
+        "custom_logit_processor": DeepSeekR1ThinkingBudgetLogitProcessor().to_str(),
+        "custom_params": {"thinking_budget": 512},
+    },
+)
+```
+
+## Function Calling
+
+Enable tool calling for DeepSeek models:
+
+```bash
+python3 -m sglang.launch_server \
+  --model deepseek-ai/DeepSeek-V3-0324 \
+  --tp 8 \
+  --tool-call-parser deepseekv3 \
+  --chat-template ./examples/chat_template/tool_chat_template_deepseekv3.jinja
+```
+
+### Example Request
+
+```bash
+curl "http://127.0.0.1:30000/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "temperature": 0,
+    "max_tokens": 100,
+    "model": "deepseek-ai/DeepSeek-V3-0324",
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "query_weather",
+        "description": "Get weather of a city",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {"type": "string", "description": "The city name"}
+          },
+          "required": ["city"]
+        }
+      }
+    }],
+    "messages": [{"role": "user", "content": "How is the weather in Beijing?"}]
+  }'
+```
+
+## Multimodal DeepSeek Models
+
+### DeepSeek-VL2
+
+Vision-language model for image understanding:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/deepseek-vl2 \
+  --tp 2 \
+  --trust-remote-code
+```
+
+### DeepSeek-OCR / OCR-2
+
+Document understanding and text extraction:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-OCR-2 \
+  --trust-remote-code
+```
+
+Example request:
+
+```python
+import requests
+
+url = "http://localhost:30000/v1/chat/completions"
+
+data = {
+    "model": "deepseek-ai/DeepSeek-OCR-2",
+    "messages": [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "<image>\n<|grounding|>Convert the document to markdown."},
+                {"type": "image_url", "image_url": {"url": "https://example.com/document.jpg"}},
+            ],
+        }
+    ],
+    "max_tokens": 512,
+}
+
+response = requests.post(url, json=data)
+print(response.text)
+```
+
+### DeepSeek-Janus-Pro
+
+Image understanding & generation:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/Janus-Pro-7B \
+  --trust-remote-code
+```
+
+## Platform-Specific Deployment
+
+### AMD GPUs (MI300X)
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --tp 8 \
+  --attention-backend triton \
+  --trust-remote-code
+```
+
+See: [AMD GPU Guide](https://github.com/sgl-project/sglang/tree/main/benchmark/deepseek_v3#using-docker-recommended)
+
+### CPU (Xeon 6980P)
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --device cpu \
+  --trust-remote-code
+```
+
+### Ascend NPU (Atlas 800I A3)
+
+See: [Ascend NPU Guide](../platforms/ascend_npu_deepseek_example.md)
+
+## Quantization Options
+
+### INT8 Quantization
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path meituan/DeepSeek-R1-Channel-INT8 \
+  --quantization int8 \
+  --tp 16
+```
+
+### AWQ Quantization
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path QuixiAI/DeepSeek-R1-0528-AWQ \
+  --quantization awq \
+  --tp 8
+```
+
+### W4A8 Quantization
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path novita/Deepseek-R1-0528-W4AFP8 \
+  --tp 8
+```
+
+## Performance Tips
+
+### Download Weights First
+
+Ensure weights are fully downloaded before starting:
+
+```bash
+huggingface-cli download deepseek-ai/DeepSeek-R1
+```
+
+### Increase Timeout for Large Models
+
+```bash
+--dist-timeout 3600  # 1 hour timeout
+```
+
+### Parallel Weight Loading
+
+```bash
+--model-loader-extra-config '{"enable_multithread_load": true}'
+```
+
+### Memory Optimization
+
+```bash
+--mem-fraction-static 0.9  # Adjust based on available memory
+```
+
+## Resources
+
+- [DeepSeek Official Repository](https://github.com/deepseek-ai/DeepSeek-V3)
+- [SGLang DeepSeek Roadmap](https://github.com/sgl-project/sglang/issues/2591)
+- [DeepSeek V3 Benchmark Examples](https://github.com/sgl-project/sglang/tree/main/benchmark/deepseek_v3)
+- [GB200 Deployment Blog (Part 1)](https://lmsys.org/blog/2025-06-16-gb200-part-1/)
+- [GB200 Deployment Blog (Part 2)](https://lmsys.org/blog/2025-09-25-gb200-part-2/)
+- [96 H100 Deployment Blog](https://lmsys.org/blog/2025-05-05-deepseek-pd-ep/)
+- [H20 Best Practices](https://lmsys.org/blog/2025-09-26-sglang-ant-group/)
+- [MLA Optimization Blog](https://lmsys.org/blog/2024-09-04-sglang-v0-3/#deepseek-multi-head-latent-attention-mla-throughput-optimizations)
+- [DP Attention Blog](https://lmsys.org/blog/2024-12-04-sglang-v0-4/#data-parallelism-attention-for-deepseek-models)
+
+## Troubleshooting
+
+### NCCL Timeout During Loading
+
+Increase distributed timeout:
+
+```bash
+--dist-timeout 3600
+```
+
+### Out of Memory
+
+Reduce memory fraction:
+
+```bash
+--mem-fraction-static 0.85
+```
+
+Or use quantized models (INT8/AWQ/W4A8).
+
+### Slow First Request
+
+Precompile DeepGEMM kernels:
+
+```bash
+python3 -m sglang.compile_deep_gemm --model deepseek-ai/DeepSeek-V3 --tp 8
+```

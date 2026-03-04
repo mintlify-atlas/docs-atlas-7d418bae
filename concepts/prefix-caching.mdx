@@ -1,0 +1,488 @@
+---
+title: Prefix Caching
+description: How SGLang's prefix caching system improves efficiency through intelligent KV cache reuse
+---
+
+Prefix caching is a key optimization in SGLang that allows multiple requests to share Key-Value (KV) cache for common token sequences. This dramatically reduces memory usage and computation time, especially for workloads with repeated context.
+
+## How Prefix Caching Works
+
+When processing LLM requests, SGLang automatically:
+
+1. **Detects shared prefixes** between incoming requests and cached sequences
+2. **Reuses cached KV states** instead of recomputing attention
+3. **Stores completed requests** in the cache for future reuse
+4. **Evicts old entries** when memory is full
+
+<Info>
+Prefix caching happens automatically - no application changes needed. Just send your requests and SGLang handles the rest.
+</Info>
+
+## Cache Lifecycle
+
+### 1. Request Arrival
+
+When a request arrives, the scheduler searches for matching prefixes:
+
+```python
+# From schedule_policy.py
+def _compute_prefix_matches(self, waiting_queue, policy):
+    for r in waiting_queue:
+        prefix_ids = r.origin_input_ids + r.output_ids
+        
+        # Find longest matching prefix in cache
+        match_result = self.tree_cache.match_prefix(
+            MatchPrefixParams(
+                key=RadixKey(token_ids=prefix_ids, extra_key=r.extra_key)
+            )
+        )
+        
+        # Store matched indices and tree node
+        r.prefix_indices = match_result.device_indices
+        r.last_node = match_result.last_device_node
+```
+
+Reference: `python/sglang/srt/managers/schedule_policy.py:182-211`
+
+### 2. KV Cache Allocation
+
+For uncached portions, new KV cache is allocated:
+
+```python
+# Two-level memory pool
+class ReqToTokenPool:
+    def alloc(self, reqs: List[Req]) -> Optional[List[int]]:
+        """Allocate request slots in the pool."""
+        need_size = len(reqs)
+        if need_size > len(self.free_slots):
+            return None
+        
+        select_index = self.free_slots[:need_size]
+        self.free_slots = self.free_slots[need_size:]
+        
+        for r in reqs:
+            r.req_pool_idx = select_index[offset]
+            offset += 1
+        
+        return [r.req_pool_idx for r in reqs]
+```
+
+Reference: `python/sglang/srt/mem_cache/memory_pool.py:155-177`
+
+### 3. Attention Computation
+
+During forward pass, attention uses both cached and new KV states:
+
+```python
+class RadixAttention(nn.Module):
+    def forward(self, q, k, v, forward_batch, save_kv_cache=True, **kwargs):
+        # k, v contain only NEW tokens
+        # Cached tokens accessed via forward_batch.req_to_token_pool
+        
+        return forward_batch.attn_backend.forward(
+            q, k, v, self, forward_batch, save_kv_cache, **kwargs
+        )
+```
+
+The attention backend (e.g., FlashInfer) receives:
+- **New KV states**: For uncached tokens
+- **Cache indices**: Pointers to cached KV states
+- **Sequence lengths**: Total length including cached portion
+
+Reference: `python/sglang/srt/layers/radix_attention.py:99-135`
+
+### 4. Request Completion
+
+When a request finishes, its KV cache is inserted into the tree:
+
+```python
+def cache_finished_req(self, req: Req, is_insert: bool = True):
+    """Cache request when it finishes."""
+    kv_committed_len = req.pop_committed_kv_cache()
+    
+    # Get token IDs and KV indices
+    token_ids = (req.origin_input_ids + req.output_ids)[:kv_committed_len]
+    kv_indices = self.req_to_token_pool.req_to_token[
+        req.req_pool_idx, :len(token_ids)
+    ]
+    
+    # Convert to bigram keys for EAGLE if needed
+    keys = convert_to_bigram_key(token_ids) if self.is_eagle else token_ids
+    keys = page_align_keys(keys, self.page_size)
+    
+    # Insert into radix tree
+    if is_insert:
+        result = self.insert(
+            InsertParams(
+                key=RadixKey(keys, req.extra_key, is_bigram=self.is_eagle),
+                value=kv_indices[:len(keys)],
+                priority=req.priority
+            )
+        )
+        
+        # Free duplicate KV cache
+        self.token_to_kv_pool_allocator.free(
+            kv_indices[req.cache_protected_len:result.prefix_len]
+        )
+```
+
+Reference: `python/sglang/srt/mem_cache/radix_cache.py:459-504`
+
+<Note>
+Already-cached portions are freed to avoid duplication. The tree maintains a single copy of each unique prefix.
+</Note>
+
+## Use Cases
+
+### System Prompts
+
+Many applications use the same system prompt for every request:
+
+```python
+system_prompt = """You are a helpful assistant that answers questions 
+about Python programming. Always provide code examples."""
+
+# First request: Full prefill (800 tokens)
+request1 = system_prompt + "\nUser: How do I read a file?"
+
+# Second request: Only processes new part (30 tokens)
+request2 = system_prompt + "\nUser: How do I write a file?"
+
+# Third request: Only processes new part (35 tokens)  
+request3 = system_prompt + "\nUser: How do I delete a file?"
+```
+
+<Tip>
+With prefix caching, the 800-token system prompt is processed once and reused, reducing prefill time by ~96% for subsequent requests.
+</Tip>
+
+### Few-Shot Examples
+
+Few-shot prompting with examples benefits greatly from caching:
+
+```python
+few_shot_prefix = """Translate English to French:
+
+English: Hello
+French: Bonjour
+
+English: Goodbye  
+French: Au revoir
+
+English: Thank you
+French: Merci
+
+"""  # ~100 tokens, cached
+
+# Only "Good morning" needs processing
+request = few_shot_prefix + "English: Good morning\nFrench:"
+```
+
+### Multi-Turn Conversations
+
+Conversation history is incrementally cached:
+
+```python
+# Turn 1
+conv1 = "User: What's the weather?\nAssistant: It's sunny today.\n"
+# Turn 2: Reuses conv1 prefix
+conv2 = conv1 + "User: Should I bring an umbrella?\nAssistant: No need, it's clear.\n" 
+# Turn 3: Reuses conv2 prefix
+conv3 = conv2 + "User: What about tomorrow?\nAssistant: "
+```
+
+### Document-Based QA
+
+Long documents can be cached and queried multiple times:
+
+```python
+# First request: Document is processed (5000 tokens)
+request1 = f"{long_document}\n\nQuestion: What is X?\nAnswer:"
+
+# Subsequent requests: Only question is processed (~20 tokens each)
+request2 = f"{long_document}\n\nQuestion: What is Y?\nAnswer:"
+request3 = f"{long_document}\n\nQuestion: What is Z?\nAnswer:"
+```
+
+<Info>
+This pattern is common in RAG (Retrieval-Augmented Generation) applications where the same document is queried multiple times.
+</Info>
+
+## Memory Management
+
+### Protected vs Evictable Memory
+
+Cache memory is divided into two categories:
+
+```python
+class RadixCache:
+    def inc_lock_ref(self, node: TreeNode):
+        """Lock nodes used by active requests."""
+        while node != self.root_node:
+            if node.lock_ref == 0:
+                # Move from evictable to protected
+                self.evictable_size_ -= len(node.key)
+                self.protected_size_ += len(node.key)
+            node.lock_ref += 1
+            node = node.parent
+    
+    def dec_lock_ref(self, node: TreeNode):
+        """Unlock nodes when requests finish."""
+        while node != self.root_node:
+            if node.lock_ref == 1:
+                # Move from protected to evictable
+                self.evictable_size_ += len(node.key)
+                self.protected_size_ -= len(node.key)
+            node.lock_ref -= 1
+            node = node.parent
+```
+
+Reference: `python/sglang/srt/mem_cache/radix_cache.py:607-639`
+
+### Eviction Triggers
+
+Eviction occurs when:
+
+1. **Memory pressure**: Not enough space for new requests
+2. **Scheduled eviction**: Periodic cleanup of old entries
+3. **Explicit flush**: Manual cache clearing
+
+```python
+def evict(self, params: EvictParams) -> EvictResult:
+    """Evict num_tokens from cache."""
+    num_tokens = params.num_tokens
+    leaves = list(self.evictable_leaves)  # Only leaves can be evicted
+    
+    # Build priority heap
+    eviction_heap = [
+        (self.eviction_strategy.get_priority(node), node)
+        for node in leaves
+    ]
+    heapq.heapify(eviction_heap)
+    
+    # Evict until target reached
+    num_evicted = 0
+    while num_evicted < num_tokens and len(eviction_heap):
+        _priority, x = heapq.heappop(eviction_heap)
+        
+        self.token_to_kv_pool_allocator.free(x.value)
+        num_evicted += len(x.value)
+        self._delete_leaf(x)
+        
+        # Parent might become leaf now
+        if len(x.parent.children) == 0 and x.parent.lock_ref == 0:
+            heapq.heappush(
+                eviction_heap,
+                (self.eviction_strategy.get_priority(x.parent), x.parent)
+            )
+```
+
+Reference: `python/sglang/srt/mem_cache/radix_cache.py:578-605`
+
+<Note>
+Only leaf nodes (endpoints of cached sequences) can be evicted initially. As leaves are removed, their parents may become new leaves and become evictable.
+</Note>
+
+## Eviction Policies
+
+Choose the policy that best fits your workload:
+
+### LRU (Least Recently Used)
+
+**Best for**: General-purpose caching with temporal locality
+
+```python
+class LRUStrategy:
+    def get_priority(self, node: TreeNode) -> float:
+        return node.last_access_time  # Lower = evict first
+```
+
+Use when recent requests are likely to be repeated soon.
+
+### LFU (Least Frequently Used)
+
+**Best for**: Caching popular prefixes
+
+```python  
+class LFUStrategy:
+    def get_priority(self, node: TreeNode) -> float:
+        return node.hit_count  # Lower = evict first
+```
+
+Keeps frequently-accessed prefixes even if not accessed recently.
+
+### FIFO (First In First Out)
+
+**Best for**: Simple, predictable eviction
+
+Evicts oldest inserted nodes first, regardless of usage.
+
+### Priority-Based
+
+**Best for**: Multi-tenant or QoS-aware systems
+
+```python
+class PriorityStrategy:
+    def get_priority(self, node: TreeNode) -> float:
+        return -node.priority  # Higher priority = lower eviction chance
+```
+
+Requests can specify priority levels to influence cache retention.
+
+<Tip>
+For most use cases, LRU provides the best balance of hit rate and simplicity. Use priority-based eviction for production systems with different SLA tiers.
+</Tip>
+
+## Advanced Features
+
+### In-Batch Prefix Caching
+
+SGLang detects shared prefixes even within a single batch:
+
+```python
+# These requests share "What is the capital of"
+requests = [
+    "What is the capital of France?",
+    "What is the capital of Germany?", 
+    "What is the capital of Italy?",
+]
+
+# Scheduler prioritizes the first request
+# Others wait for the prefix to be cached
+# Then execute with the cached prefix
+```
+
+Reference: `python/sglang/srt/managers/schedule_policy.py:213-240`
+
+### Extra Key Namespace
+
+Separate cache namespaces using `extra_key`:
+
+```python
+class RadixKey:
+    def __init__(
+        self,
+        token_ids: List[int],
+        extra_key: Optional[str] = None,  # e.g., "lora_id:customer1"
+        is_bigram: bool = False,
+    ):
+        self.token_ids = token_ids
+        self.extra_key = extra_key
+```
+
+Use cases:
+- **LoRA adapters**: Separate cache per adapter
+- **Multi-tenancy**: Isolate cache by customer
+- **Cache versioning**: Invalidate by changing version
+
+Reference: `python/sglang/srt/mem_cache/radix_cache.py:67-79`
+
+### Page Alignment
+
+For memory efficiency, cache can be aligned to page boundaries:
+
+```python
+# With page_size=16
+sequence = [1, 2, 3, ..., 35]  # 35 tokens
+
+# Only first 32 tokens cached (2 complete pages)
+# Last 3 tokens not cached (incomplete page)
+cached_portion = sequence[:32]
+```
+
+This ensures:
+- **Efficient memory allocation**: No fragmented pages
+- **Better sharing**: Only complete pages are shared
+- **Aligned access**: Hardware-friendly memory access patterns
+
+<Info>
+Set `--page-size` based on your hardware and model. Typical values: 1 (no alignment), 8, 16, or 32.
+</Info>
+
+## Performance Metrics
+
+### Cache Hit Rate
+
+Monitor cache effectiveness:
+
+```python
+hit_rate = total_cached_tokens / total_tokens_processed
+```
+
+Typical hit rates:
+- **RAG workloads**: 80-95%
+- **Few-shot prompting**: 70-90%  
+- **Multi-turn chat**: 60-80%
+- **Diverse queries**: 20-40%
+
+### Memory Usage
+
+Track cache memory:
+
+```python
+total_cache = tree_cache.protected_size() + tree_cache.evictable_size()
+active_requests = tree_cache.protected_size()
+available_for_reuse = tree_cache.evictable_size()
+```
+
+### Time Savings
+
+Measure prefill time reduction:
+
+```python
+# Without caching
+ttft_no_cache = num_prefix_tokens * time_per_token
+
+# With caching
+ttft_cached = num_uncached_tokens * time_per_token
+
+# Speedup
+speedup = ttft_no_cache / ttft_cached
+```
+
+## Configuration
+
+Key configuration options:
+
+```bash
+# Enable/disable prefix caching
+--disable-radix-cache  # Disable (not recommended)
+
+# Set eviction policy  
+--radix-eviction-policy lru  # Options: lru, lfu, fifo, mru, filo, priority
+
+# Memory allocation
+--mem-fraction-static 0.9  # GPU memory for KV cache
+
+# Page alignment
+--page-size 16  # Align cache to 16-token pages
+
+# Chunked prefill (for large prefixes)
+--chunked-prefill-size 2048  # Split large prefills
+```
+
+## Best Practices
+
+1. **Design for reuse**: Structure prompts with common prefixes
+2. **Monitor hit rates**: Low hit rates indicate poor prompt design
+3. **Use appropriate eviction**: Match policy to workload characteristics
+4. **Set sufficient memory**: Undersized cache leads to thrashing
+5. **Leverage extra_key**: Isolate cache when needed
+
+<Tip>
+For maximum benefit, organize your application to send requests with shared context consecutively or in batches.
+</Tip>
+
+## Limitations
+
+1. **Exact token match required**: Even one different token breaks the prefix
+2. **Special tokens matter**: System tokens must match exactly
+3. **Tokenizer dependence**: Same text with different tokenizers won't match
+4. **Memory overhead**: Tree structure adds ~10-20% overhead
+5. **Eviction cost**: Cache lookup and eviction have CPU overhead
+
+## Related Topics
+
+- [RadixAttention](/concepts/radix-attention) - The attention mechanism  
+- [System Architecture](/concepts/architecture) - Overall system design
+- [Continuous Batching](/concepts/continuous-batching) - Dynamic batching

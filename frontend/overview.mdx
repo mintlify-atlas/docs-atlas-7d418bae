@@ -1,0 +1,187 @@
+---
+title: Frontend Language Overview
+description: Learn about SGLang's frontend language for high-level LLM programming
+---
+
+SGLang provides a powerful frontend language that makes it easy to program LLM applications with intuitive primitives and control flow. The frontend language is designed to simplify complex prompting workflows, enable advanced features like parallel sampling and streaming, and work seamlessly with various backend providers.
+
+## Key Features
+
+### Intuitive Programming Model
+
+The SGLang frontend uses Python decorators and a state-based programming model that feels natural for Python developers:
+
+```python
+import sglang as sgl
+
+@sgl.function
+def multi_turn_question(s, question_1, question_2):
+    s += sgl.user(question_1)
+    s += sgl.assistant(sgl.gen("answer_1", max_tokens=256))
+    s += sgl.user(question_2)
+    s += sgl.assistant(sgl.gen("answer_2", max_tokens=256))
+```
+
+### Advanced Control Flow
+
+**Parallel Sampling**: Fork execution to generate multiple responses in parallel
+
+```python
+@sgl.function
+def tip_suggestion(s):
+    s += "Here are two tips for staying healthy: "
+    s += "1. Balanced Diet. 2. Regular Exercise.\n\n"
+    
+    forks = s.fork(2)
+    for i, f in enumerate(forks):
+        f += f"Now, expand tip {i+1} into a paragraph:\n"
+        f += sgl.gen(f"detailed_tip", max_tokens=256, stop="\n\n")
+    
+    s += "Tip 1:" + forks[0]["detailed_tip"] + "\n"
+    s += "Tip 2:" + forks[1]["detailed_tip"] + "\n"
+    s += "In summary" + sgl.gen("summary")
+```
+
+**Conditional Logic**: Use Python's native control flow with generated outputs
+
+```python
+@sgl.function
+def tool_use(s, question):
+    s += "To answer this question: " + question + ". "
+    s += "I need to use a " + sgl.gen("tool", choices=["calculator", "search engine"]) + ". "
+    
+    if s["tool"] == "calculator":
+        s += "The math expression is" + sgl.gen("expression")
+    elif s["tool"] == "search engine":
+        s += "The key word to search is" + sgl.gen("word")
+```
+
+### Execution Modes
+
+**Single Execution**: Run a single request and get results
+
+```python
+state = multi_turn_question.run(
+    question_1="What is the capital of the United States?",
+    question_2="List two local attractions."
+)
+print(state["answer_1"])
+```
+
+**Batch Processing**: Process multiple inputs efficiently
+
+```python
+states = text_qa.run_batch(
+    [
+        {"question": "What is the capital of the United Kingdom?"},
+        {"question": "What is the capital of France?"},
+        {"question": "What is the capital of Japan?"},
+    ],
+    progress_bar=True,
+)
+```
+
+**Streaming**: Stream outputs in real-time
+
+```python
+state = text_qa.run(
+    question="What is the capital of France?",
+    stream=True
+)
+
+for out in state.text_iter():
+    print(out, end="", flush=True)
+```
+
+**Async Streaming**: Asynchronous iteration for concurrent applications
+
+```python
+import asyncio
+
+async def async_stream():
+    state = multi_turn_question.run(
+        question_1="What is the capital of the United States?",
+        question_2="List two local attractions.",
+        stream=True,
+    )
+    
+    async for out in state.text_async_iter(var_name="answer_2"):
+        print(out, end="", flush=True)
+
+asyncio.run(async_stream())
+```
+
+## Core Concepts
+
+### State Object
+
+The state object (`s`) is the central construct in SGLang functions. It maintains:
+- The conversation history
+- Generated variables and their values
+- Role context (system, user, assistant)
+- Images and video data for multimodal models
+
+### Variables
+
+Generated text is automatically stored in named variables:
+
+```python
+s += sgl.gen("answer", max_tokens=100)
+print(s["answer"])  # Access the generated text
+```
+
+### Composition
+
+SGLang functions can be composed and reused:
+
+```python
+@sgl.function
+def inner_function(s, topic):
+    s += f"Tell me about {topic}: "
+    s += sgl.gen("description", max_tokens=50)
+
+@sgl.function
+def outer_function(s, topic1, topic2):
+    s += inner_function(topic=topic1)
+    s += inner_function(topic=topic2)
+```
+
+## Constrained Generation
+
+SGLang supports various forms of constrained generation:
+
+**Choice Selection**: Choose from predefined options
+
+```python
+s += sgl.gen("tool", choices=["calculator", "search engine"])
+```
+
+**Regular Expressions**: Constrain output format with regex
+
+```python
+s += sgl.gen(
+    "ip_address",
+    regex=r"((25[0-5]|2[0-4]\d|[01]?\d\d?)\.)" +
+          r"{3}(25[0-5]|2[0-4]\d|[01]?\d\d?)"
+)
+```
+
+**JSON Schema**: Generate structured JSON output
+
+```python
+from pydantic import BaseModel
+from sglang.srt.constrained.outlines_backend import build_regex_from_object
+
+class Character(BaseModel):
+    name: str
+    age: int
+    role: str
+
+s += sgl.gen("character", regex=build_regex_from_object(Character))
+```
+
+## Next Steps
+
+- Learn about the [@sgl.function decorator](/frontend/sglang-functions)
+- Explore [generation primitives](/frontend/generation-primitives) like `gen()`, `select()`, and `image()`
+- Configure [backend options](/frontend/backends) for different LLM providers

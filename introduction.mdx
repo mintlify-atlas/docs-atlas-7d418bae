@@ -1,0 +1,280 @@
+---
+title: SGLang documentation
+description: A high-performance serving framework for large language models and multimodal models
+mode: custom
+---
+
+<div className="relative overflow-hidden dark:bg-[#0f1117] bg-white">
+  {/* Hero Section */}
+  <div className="relative py-20 px-4 sm:px-6 lg:px-8" style={{
+    background: 'linear-gradient(135deg, #1a1d27 0%, #0f1117 100%)'
+  }}>
+    <div className="max-w-7xl mx-auto">
+      <div className="text-center">
+        <h1 className="text-5xl sm:text-6xl lg:text-7xl font-bold text-white mb-6">
+          SGLang
+        </h1>
+        <p className="text-xl sm:text-2xl text-gray-300 mb-8 max-w-3xl mx-auto">
+          High-performance serving framework for large language models and multimodal models
+        </p>
+        <p className="text-base sm:text-lg text-gray-400 mb-10 max-w-2xl mx-auto">
+          Achieve low-latency, high-throughput inference from a single GPU to large distributed clusters with RadixAttention, continuous batching, and advanced optimizations.
+        </p>
+        <div className="flex flex-wrap gap-4 justify-center">
+          <a 
+            href="/quickstart"
+            className="px-8 py-3 rounded-lg font-semibold text-white transition-all duration-200 hover:shadow-lg"
+            style={{ backgroundColor: '#b14421' }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#d4621f'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#b14421'}
+          >
+            Get started
+          </a>
+          <a 
+            href="/api/engine"
+            className="px-8 py-3 rounded-lg font-semibold border transition-all duration-200 dark:border-gray-700 dark:bg-[#1a1d27] dark:text-white dark:hover:border-[#b14421] bg-white text-gray-900 border-gray-300 hover:border-[#b14421]"
+          >
+            API reference
+          </a>
+          <a 
+            href="https://github.com/sgl-project/sglang"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-8 py-3 rounded-lg font-semibold border transition-all duration-200 dark:border-gray-700 dark:bg-[#1a1d27] dark:text-white dark:hover:border-[#b14421] bg-white text-gray-900 border-gray-300 hover:border-[#b14421]"
+          >
+            View on GitHub
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {/* Quick Start Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <h2 className="text-3xl font-bold dark:text-white text-gray-900 mb-3">Quick start</h2>
+    <p className="text-base dark:text-gray-400 text-gray-600 mb-8">Get SGLang running in minutes</p>
+    
+    <Steps>
+      <Step title="Install SGLang">
+        Install SGLang using pip:
+        
+        ```bash
+        pip install "sglang[all]"
+        ```
+        
+        <Note>For AMD ROCm GPUs, use `pip install "sglang[all]" --index-url https://download.pytorch.org/whl/rocm6.2`</Note>
+      </Step>
+      
+      <Step title="Launch a server">
+        Start the SGLang server with a model:
+        
+        ```bash
+        python -m sglang.launch_server --model-path meta-llama/Meta-Llama-3.1-8B-Instruct --port 30000
+        ```
+        
+        Or use the CLI:
+        
+        ```bash
+        sglang serve meta-llama/Meta-Llama-3.1-8B-Instruct --port 30000
+        ```
+      </Step>
+      
+      <Step title="Send a request">
+        Use the OpenAI-compatible API to send requests:
+        
+        ```python
+        import openai
+        
+        client = openai.Client(
+            base_url="http://localhost:30000/v1",
+            api_key="EMPTY"
+        )
+        
+        response = client.chat.completions.create(
+            model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+            messages=[
+                {"role": "user", "content": "What is the capital of France?"}
+            ],
+            temperature=0.7
+        )
+        
+        print(response.choices[0].message.content)
+        ```
+        
+        <Accordion title="Example response">
+        ```
+        The capital of France is Paris.
+        ```
+        </Accordion>
+      </Step>
+    </Steps>
+  </div>
+
+  {/* Key Features Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <h2 className="text-3xl font-bold dark:text-white text-gray-900 mb-3">Key features</h2>
+    <p className="text-base dark:text-gray-400 text-gray-600 mb-8">Everything you need for high-performance LLM serving</p>
+    
+    <CardGroup cols={2}>
+      <Card title="RadixAttention" icon="bolt" href="/concepts/radix-attention">
+        Efficient prefix caching that automatically reuses KV cache across requests
+      </Card>
+      <Card title="Continuous batching" icon="layer-group" href="/concepts/continuous-batching">
+        Zero-overhead CPU scheduler for optimal GPU utilization
+      </Card>
+      <Card title="Distributed serving" icon="server" href="/distributed/tensor-parallelism">
+        Multi-dimensional parallelism: tensor, pipeline, expert, and data parallelism
+      </Card>
+      <Card title="Structured outputs" icon="code" href="/advanced/structured-outputs">
+        Fast JSON decoding with compressed finite state machines
+      </Card>
+      <Card title="Multi-LoRA batching" icon="network-wired" href="/advanced/lora">
+        Serve multiple LoRA adapters in a single batch
+      </Card>
+      <Card title="Quantization" icon="compress" href="/advanced/quantization">
+        Support for FP4, FP8, INT4, AWQ, and GPTQ quantization
+      </Card>
+    </CardGroup>
+  </div>
+
+  {/* Explore by Topic Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <h2 className="text-3xl font-bold dark:text-white text-gray-900 mb-3">Explore by topic</h2>
+    <p className="text-base dark:text-gray-400 text-gray-600 mb-8">Deep dive into specific areas</p>
+    
+    <CardGroup cols={3}>
+      <Card title="Core concepts" icon="book-open" href="/concepts/architecture">
+        Understand SGLang's architecture and design
+      </Card>
+      <Card title="Backend runtime" icon="rocket" href="/backend/launch-server">
+        Configure and run the serving backend
+      </Card>
+      <Card title="Frontend language" icon="wand-magic-sparkles" href="/frontend/overview">
+        Build prompts with constrained generation
+      </Card>
+      <Card title="Model support" icon="microchip" href="/models/supported-models">
+        100+ supported LLM and multimodal models
+      </Card>
+      <Card title="Advanced features" icon="star" href="/advanced/structured-outputs">
+        Structured outputs, LoRA, speculative decoding
+      </Card>
+      <Card title="Optimization" icon="gauge-high" href="/optimization/hicache">
+        Performance tuning and optimization techniques
+      </Card>
+    </CardGroup>
+  </div>
+
+  {/* Hardware & Deployment Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <h2 className="text-3xl font-bold dark:text-white text-gray-900 mb-3">Hardware & deployment</h2>
+    <p className="text-base dark:text-gray-400 text-gray-600 mb-8">Run SGLang on your infrastructure</p>
+    
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="dark:bg-[#1a1d27] bg-gray-50 rounded-xl p-6 dark:border dark:border-gray-800">
+        <h3 className="text-xl font-semibold dark:text-white text-gray-900 mb-4">Supported hardware</h3>
+        <ul className="space-y-2 dark:text-gray-300 text-gray-700">
+          <li className="flex items-start">
+            <span className="mr-2" style={{ color: '#b14421' }}>•</span>
+            <span>NVIDIA GPUs (GB200, B300, H100, A100, Spark)</span>
+          </li>
+          <li className="flex items-start">
+            <span className="mr-2" style={{ color: '#b14421' }}>•</span>
+            <span>AMD GPUs (MI355, MI300)</span>
+          </li>
+          <li className="flex items-start">
+            <span className="mr-2" style={{ color: '#b14421' }}>•</span>
+            <span>Intel Xeon CPUs</span>
+          </li>
+          <li className="flex items-start">
+            <span className="mr-2" style={{ color: '#b14421' }}>•</span>
+            <span>Google TPUs</span>
+          </li>
+          <li className="flex items-start">
+            <span className="mr-2" style={{ color: '#b14421' }}>•</span>
+            <span>Ascend NPUs</span>
+          </li>
+        </ul>
+      </div>
+      
+      <div className="dark:bg-[#1a1d27] bg-gray-50 rounded-xl p-6 dark:border dark:border-gray-800">
+        <h3 className="text-xl font-semibold dark:text-white text-gray-900 mb-4">Deployment options</h3>
+        <div className="space-y-3">
+          <a href="/deployment/docker" className="block dark:text-gray-300 text-gray-700 dark:hover:text-[#b14421] hover:text-[#b14421] transition-colors">
+            → Docker containers
+          </a>
+          <a href="/deployment/kubernetes" className="block dark:text-gray-300 text-gray-700 dark:hover:text-[#b14421] hover:text-[#b14421] transition-colors">
+            → Kubernetes clusters
+          </a>
+          <a href="/deployment/cloud-platforms" className="block dark:text-gray-300 text-gray-700 dark:hover:text-[#b14421] hover:text-[#b14421] transition-colors">
+            → Cloud platforms (AWS, GCP, Azure)
+          </a>
+          <a href="/deployment/multi-node" className="block dark:text-gray-300 text-gray-700 dark:hover:text-[#b14421] hover:text-[#b14421] transition-colors">
+            → Multi-node distributed setup
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {/* Resources Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <h2 className="text-3xl font-bold dark:text-white text-gray-900 mb-3">Resources</h2>
+    <p className="text-base dark:text-gray-400 text-gray-600 mb-8">Additional help and information</p>
+    
+    <CardGroup cols={2}>
+      <Card title="FAQ" icon="circle-question" href="/resources/faq">
+        Common questions and answers
+      </Card>
+      <Card title="Environment variables" icon="gear" href="/resources/environment-variables">
+        Configuration reference
+      </Card>
+      <Card title="Troubleshooting" icon="triangle-exclamation" href="/resources/troubleshooting">
+        Debugging and common issues
+      </Card>
+      <Card title="Learn more" icon="graduation-cap" href="/resources/learn-more">
+        Blog posts, papers, and talks
+      </Card>
+    </CardGroup>
+  </div>
+
+  {/* Community & Support Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="dark:bg-[#1a1d27] bg-gray-50 rounded-2xl p-8 dark:border dark:border-gray-800">
+      <div className="text-center max-w-2xl mx-auto">
+        <h2 className="text-2xl font-bold dark:text-white text-gray-900 mb-3">Join the community</h2>
+        <p className="text-base dark:text-gray-400 text-gray-600 mb-6">
+          SGLang powers over 400,000 GPUs worldwide and is trusted by leading enterprises. Get help, share feedback, and connect with other users.
+        </p>
+        <div className="flex flex-wrap gap-4 justify-center">
+          <a 
+            href="https://slack.sglang.io/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-6 py-2.5 rounded-lg font-semibold text-white transition-all duration-200"
+            style={{ backgroundColor: '#b14421' }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#d4621f'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#b14421'}
+          >
+            Join Slack
+          </a>
+          <a 
+            href="https://github.com/sgl-project/sglang"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-6 py-2.5 rounded-lg font-semibold border transition-all duration-200 dark:border-gray-700 dark:bg-transparent dark:text-white dark:hover:border-[#b14421] bg-white text-gray-900 border-gray-300 hover:border-[#b14421]"
+          >
+            GitHub
+          </a>
+          <a 
+            href="https://meet.sglang.io/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-6 py-2.5 rounded-lg font-semibold border transition-all duration-200 dark:border-gray-700 dark:bg-transparent dark:text-white dark:hover:border-[#b14421] bg-white text-gray-900 border-gray-300 hover:border-[#b14421]"
+          >
+            Weekly dev meeting
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

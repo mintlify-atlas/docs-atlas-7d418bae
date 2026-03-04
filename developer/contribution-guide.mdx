@@ -1,0 +1,229 @@
+---
+title: Contribution Guide
+description: How to contribute to SGLang
+---
+
+# Contribution Guide
+
+Welcome to SGLang! We appreciate your interest in contributing. This guide provides an overview of how to set up your environment, run tests, build documentation, and open a Pull Request.
+
+## Getting Started
+
+### Fork and Clone
+
+New contributors do not have write permission to the official SGLang repository. Please fork the repository under your GitHub account, then clone your fork locally.
+
+```bash
+git clone https://github.com/<your_username>/sglang.git
+cd sglang
+```
+
+### Install from Source
+
+Build and install SGLang from source. This allows you to test your changes locally.
+
+```bash
+# Install dependencies
+pip install -e ".[all]"
+
+# Build kernels
+pip install flashinfer -i https://flashinfer.ai/whl/cu121/torch2.4/
+pip install sgl-kernel
+```
+
+For detailed installation instructions, see the [installation guide](/get-started/install).
+
+## Development Workflow
+
+### 1. Create a Feature Branch
+
+Never commit directly to `main`. Always create a new branch:
+
+```bash
+git checkout -b feature/my-new-feature
+```
+
+### 2. Make Your Changes
+
+Edit the code, add new features, or fix bugs. Follow the [code style guidelines](#code-style) below.
+
+### 3. Format Code
+
+We use [pre-commit](https://pre-commit.com/) for code formatting and linting:
+
+```bash
+# Install pre-commit
+pip install pre-commit
+pre-commit install
+
+# Run checks on all files
+pre-commit run --all-files
+```
+
+If the checks fail, fix the issues and run again. All checks must pass before creating a PR.
+
+### 4. Add Tests
+
+Add unit tests for new features or bug fixes. SGLang uses Python's `unittest` framework.
+
+```bash
+# Run tests
+python -m pytest test/srt/test_your_feature.py
+
+# Run specific test
+python -m pytest test/srt/test_your_feature.py::TestClass::test_method
+```
+
+For more details, see [test/README.md](https://github.com/sgl-project/sglang/tree/main/test/README.md).
+
+### 5. Write Documentation
+
+Document your changes in the appropriate documentation files. We recommend new contributors start by writing documentation to quickly understand the codebase.
+
+For documentation guidelines, see [docs/README.md](https://github.com/sgl-project/sglang/tree/main/docs/README.md).
+
+### 6. Test Accuracy (if applicable)
+
+If your changes affect model output, run accuracy tests:
+
+```bash
+# Launch server
+python -m sglang.launch_server --model-path Qwen/Qwen2-7B-Instruct
+
+# Run GSM8K benchmark (sanity check)
+python -m sglang.test.few_shot_gsm8k --num-questions 200
+```
+
+Note: This is a sanity check, not a rigorous test. The accuracy can vary by 1-5% due to batching and non-determinism.
+
+### 7. Benchmark Performance (if applicable)
+
+For performance-critical changes, benchmark your code:
+
+```bash
+python -m sglang.bench_serving \
+  --backend sglang \
+  --model meta-llama/Llama-3.1-8B-Instruct \
+  --num-prompts 1000 \
+  --random-input-len 256 \
+  --random-output-len 32
+```
+
+See [Benchmark and Profiling](/developer/benchmark-profiling) for more details.
+
+### 8. Commit and Push
+
+Commit your changes with a descriptive message:
+
+```bash
+git add .
+git commit -m "Add feature X to improve Y"
+git push origin feature/my-new-feature
+```
+
+### 9. Create Pull Request
+
+Go to GitHub and create a Pull Request from your fork to the main SGLang repository.
+
+- **Title**: Clear and concise description of the change
+- **Description**: Explain what the PR does, why it's needed, and how to test it
+- **Link issues**: If fixing a bug, reference the issue number
+
+## Code Review Process
+
+Follow the process described in [MAINTAINER.md](https://github.com/sgl-project/sglang/blob/main/.github/MAINTAINER.md):
+
+1. **Merge Oncall** reviews the PR
+2. **Codeowner** reviews if touching their area
+3. Other reviewers may provide feedback
+4. Address feedback and update PR
+5. Once approved, the PR will be merged
+
+## CI Testing
+
+### Triggering CI
+
+Only trusted contributors can trigger CI tests. If you have permission (listed in [CI_PERMISSIONS.json](https://github.com/sgl-project/sglang/blob/main/.github/CI_PERMISSIONS.json)), you can:
+
+- `/tag-run-ci-label`: Add "run-ci" label to run CI on every commit
+- `/rerun-failed-ci`: Rerun failed tests
+- `/tag-and-rerun-ci`: Add label and rerun tests
+- `/rerun-stage <stage-name>`: Rerun a specific test stage
+
+**PR authors** can always use `/rerun-failed-ci` on their own PRs.
+
+If you don't have permission, ask a maintainer to trigger CI for you.
+
+### CI Rate Limits
+
+To prevent abuse, CI has rate limits. The default cooldown is 120 minutes between runs. Users in `CI_PERMISSIONS.json` may have custom limits.
+
+## Code Style Guidelines
+
+### General Principles
+
+- **Avoid code duplication**: Extract repeated code (>5 lines) into functions
+- **Minimize device synchronization**: Avoid `tensor.item()` and `tensor.cpu()` in hot paths
+- **Extreme efficiency**: SGLang is a runtime—optimize everything on the critical path
+- **Pure functions**: Avoid in-place modifications of arguments
+- **Keep files concise**: Split files >2000 lines into smaller modules
+- **Fast tests**: Split test files that run >500 seconds
+
+### Hardware/Feature Support
+
+When adding support for new hardware or features:
+
+- **Don't drastically change existing code**
+- **Use new files** for hardware-specific components (e.g., `allocator_ascend.py`)
+- **Common path first**: Put the most common case (NVIDIA GPU) in the first if-branch
+
+### Example: Avoid Redundant Runtime Checks
+
+```python
+# Bad: Checking every layer
+class MyLayer:
+    def forward(self, x):
+        if self.some_condition:  # This is the same for every layer!
+            return self.op_a(x)
+        else:
+            return self.op_b(x)
+
+# Good: Cache the result
+class MyLayer:
+    def __init__(self):
+        self.use_op_a = self.some_condition  # Cached once
+    
+    def forward(self, x):
+        if self.use_op_a:
+            return self.op_a(x)
+        else:
+            return self.op_b(x)
+```
+
+## Updating sgl-kernel
+
+Since `sglang` and `sgl-kernel` are separate packages, you cannot update a kernel and use it immediately in the same PR. Follow these steps:
+
+1. **Submit PR to update sgl-kernel source** without using it ([example](https://github.com/sgl-project/sglang/pull/8884))
+2. **Bump sgl-kernel version** in a new PR ([example](https://github.com/sgl-project/sglang/pull/9220))
+   - This triggers a PyPI release of the new kernel
+3. **Use the new kernel** in a third PR:
+   - Update `sgl-kernel` version in `pyproject.toml`
+   - Update caller code in SGLang
+
+## Tips for Newcomers
+
+- **Start small**: Pick issues labeled ["good first issue"](https://github.com/sgl-project/sglang/issues?q=is%3Aissue+label%3A%22good+first+issue%22) or ["help wanted"](https://github.com/sgl-project/sglang/issues?q=is%3Aissue+label%3A%22help+wanted%22)
+- **Write docs**: Documentation contributions help you learn the codebase
+- **Read the code walkthrough**: Check out this [code walkthrough](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/tree/main/sglang/code-walk-through) for a deeper understanding
+- **Ask questions**: Join our [Slack channel](https://slack.sglang.io) for help
+
+## Resources
+
+- [GitHub Repository](https://github.com/sgl-project/sglang)
+- [Issue Tracker](https://github.com/sgl-project/sglang/issues)
+- [Slack Community](https://slack.sglang.io)
+- [Documentation](https://sglang.ai/docs)
+- [Maintainer Guide](https://github.com/sgl-project/sglang/blob/main/.github/MAINTAINER.md)
+
+Thank you for contributing to SGLang! Happy coding!

@@ -1,0 +1,376 @@
+---
+title: Quantization
+description: Reduce memory usage and increase throughput with model quantization
+---
+
+SGLang supports various quantization methods to reduce memory usage and increase throughput. Quantization converts model weights from high-precision formats (BF16/FP16) to lower-precision formats (INT8/FP8/INT4/FP4).
+
+<Note>
+**Offline quantization is recommended** over online quantization for better performance, usability, and convenience.
+</Note>
+
+## Quantization Types
+
+<CardGroup cols={2}>
+  <Card title="Offline Quantization" icon="floppy-disk">
+    Load pre-quantized model weights. Required for GPTQ, AWQ, and optimal for FP8/FP4.
+  </Card>
+  <Card title="Online Quantization" icon="bolt">
+    Dynamically quantize weights at runtime. Convenient but slower startup and higher memory usage.
+  </Card>
+</CardGroup>
+
+### Offline vs Online
+
+| Aspect | Offline | Online |
+|--------|---------|--------|
+| **Startup time** | Fast | Slow (quantization on startup) |
+| **Memory usage** | Low | High (during quantization) |
+| **Quality control** | Can be validated before deployment | Limited pre-deployment validation |
+| **Preparation** | Requires quantization step | No preparation needed |
+
+## Offline Quantization
+
+Load pre-quantized models directly. The quantization method is automatically detected from the model configuration.
+
+### Basic Usage
+
+```bash
+# Load pre-quantized model (quantization auto-detected)
+python -m sglang.launch_server \
+    --model-path hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4 \
+    --port 30000
+```
+
+<Warning>
+Do NOT add `--quantization` when loading pre-quantized models. The quantization method is parsed from the model config.
+</Warning>
+
+### Per-Channel Quantization
+
+For per-channel quantized models (INT8/FP8) with per-token dynamic quantization, you can optionally specify `--quantization` to use sgl-kernel instead of vLLM kernels:
+
+```bash
+python -m sglang.launch_server \
+    --model-path neuralmagic/Meta-Llama-3.1-8B-Instruct-FP8-dynamic \
+    --quantization w8a8_fp8  # Use sgl-kernel FP8 kernel
+```
+
+## Quantization Tools
+
+### Unsloth (Recommended)
+
+We strongly recommend [Unsloth](https://docs.unsloth.ai/basics/inference-and-deployment/sglang-guide) for quantization and deployment.
+
+### NVIDIA ModelOpt
+
+NVIDIA ModelOpt provides advanced quantization optimized for NVIDIA hardware.
+
+#### Quick Start
+
+```bash
+# Install ModelOpt
+pip install nvidia-modelopt
+
+# Quantize and export
+python examples/usage/modelopt_quantize_and_export.py quantize \
+    --model-path TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+    --export-dir ./quantized_tinyllama_fp8 \
+    --quantization-method modelopt_fp8
+
+# Deploy
+python -m sglang.launch_server \
+    --model-path ./quantized_tinyllama_fp8 \
+    --quantization modelopt \
+    --port 30000
+```
+
+#### Available Methods
+
+<CardGroup cols={2}>
+  <Card title="FP8" icon="gauge-high">
+    `modelopt_fp8` - Optimal on NVIDIA Hopper and Blackwell GPUs
+  </Card>
+  <Card title="FP4" icon="gauge">
+    `modelopt_fp4` - Optimal on NVIDIA Blackwell GPUs
+  </Card>
+</CardGroup>
+
+#### Python API
+
+```python
+import sglang as sgl
+from sglang.srt.configs.device_config import DeviceConfig
+from sglang.srt.configs.load_config import LoadConfig
+from sglang.srt.configs.model_config import ModelConfig
+from sglang.srt.model_loader.loader import get_model_loader
+
+# Configure model with quantization
+model_config = ModelConfig(
+    model_path="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    quantization="modelopt_fp8",
+    trust_remote_code=True,
+)
+
+load_config = LoadConfig(
+    modelopt_export_path="./exported_model",
+    modelopt_checkpoint_save_path="./checkpoint.pth",  # Optional
+)
+
+device_config = DeviceConfig(device="cuda")
+
+# Load and quantize
+model_loader = get_model_loader(load_config, model_config)
+quantized_model = model_loader.load_model(
+    model_config=model_config,
+    device_config=device_config,
+)
+```
+
+#### Pre-Quantized Models
+
+Load existing pre-quantized ModelOpt models:
+
+```bash
+# FP8 model
+python -m sglang.launch_server \
+    --model-path nvidia/Llama-3.1-8B-Instruct-FP8 \
+    --quantization modelopt_fp8
+
+# FP4 model
+python -m sglang.launch_server \
+    --model-path nvidia/Llama-3.3-70B-Instruct-NVFP4 \
+    --quantization modelopt_fp4
+```
+
+### auto-round
+
+Supports multiple quantization formats and both LLMs and VLMs.
+
+```bash
+pip install auto-round
+```
+
+#### LLM Quantization
+
+```python
+from auto_round import AutoRound
+
+model_id = "meta-llama/Llama-3.2-1B-Instruct"
+quant_path = "Llama-3.2-1B-Instruct-autoround-4bit"
+
+# Schemes: W2A16, W3A16, W4A16, W8A16, NVFP4, MXFP4, GGUF:Q4_K_M, etc.
+scheme = "W4A16"
+format = "auto_round"
+
+autoround = AutoRound(model_id, scheme=scheme)
+autoround.quantize_and_save(quant_path, format=format)
+```
+
+#### VLM Quantization
+
+```python
+from auto_round import AutoRoundMLLM
+
+model_name = "Qwen/Qwen2-VL-2B-Instruct"
+quant_path = "Qwen2-VL-2B-Instruct-autoround-4bit"
+
+autoround = AutoRoundMLLM(model_name, scheme="W4A16")
+autoround.quantize_and_save(quant_path, format="auto_round")
+```
+
+#### Command Line
+
+```bash
+auto-round \
+    --model meta-llama/Llama-3.2-1B-Instruct \
+    --bits 4 \
+    --group_size 128 \
+    --format "auto_round" \
+    --output_dir ./tmp_autoround
+```
+
+### GPTQModel
+
+```bash
+pip install gptqmodel --no-build-isolation -v
+```
+
+```python
+from datasets import load_dataset
+from gptqmodel import GPTQModel, QuantizeConfig
+
+model_id = "meta-llama/Llama-3.2-1B-Instruct"
+quant_path = "Llama-3.2-1B-Instruct-gptqmodel-4bit"
+
+# Load calibration dataset
+calibration_dataset = load_dataset(
+    "allenai/c4",
+    data_files="en/c4-train.00001-of-01024.json.gz",
+    split="train"
+).select(range(1024))["text"]
+
+# Configure and quantize
+quant_config = QuantizeConfig(bits=4, group_size=128)
+model = GPTQModel.load(model_id, quant_config)
+model.quantize(calibration_dataset, batch_size=2)
+model.save(quant_path)
+```
+
+### LLM Compressor
+
+From the vLLM project, supports FP8 and other formats.
+
+```bash
+pip install llmcompressor
+```
+
+```python
+from transformers import AutoTokenizer
+from llmcompressor.transformers import SparseAutoModelForCausalLM, oneshot
+from llmcompressor.modifiers.quantization import QuantizationModifier
+
+MODEL_ID = "meta-llama/Meta-Llama-3-8B-Instruct"
+
+# Load model
+model = SparseAutoModelForCausalLM.from_pretrained(
+    MODEL_ID, device_map="auto", torch_dtype="auto"
+)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
+# Configure FP8 quantization
+recipe = QuantizationModifier(
+    targets="Linear",
+    scheme="FP8_DYNAMIC",
+    ignore=["lm_head"]
+)
+
+# Apply quantization
+oneshot(model=model, recipe=recipe)
+
+# Save
+SAVE_DIR = MODEL_ID.split("/")[1] + "-FP8-Dynamic"
+model.save_pretrained(SAVE_DIR)
+tokenizer.save_pretrained(SAVE_DIR)
+```
+
+Deploy:
+
+```bash
+python -m sglang.launch_server \
+    --model-path ./Meta-Llama-3-8B-Instruct-FP8-Dynamic
+```
+
+## Online Quantization
+
+Quantize weights dynamically at server startup.
+
+### FP8 Online
+
+```bash
+python -m sglang.launch_server \
+    --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+    --quantization fp8 \
+    --port 30000
+```
+
+### TorchAO Quantization
+
+SGLang supports [torchao](https://github.com/pytorch/ao) quantization methods:
+
+```bash
+python -m sglang.launch_server \
+    --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+    --torchao-config int4wo-128 \
+    --port 30000
+```
+
+#### Supported Methods
+
+- `int8dq` - INT8 dynamic quantization (⚠️ disable CUDA graph with `--disable-cuda-graph`)
+- `int8wo` - INT8 weight-only
+- `fp8wo` - FP8 weight-only  
+- `fp8dq-per_tensor` - FP8 dynamic per-tensor
+- `fp8dq-per_row` - FP8 dynamic per-row
+- `int4wo-32`, `int4wo-64`, `int4wo-128`, `int4wo-256` - INT4 weight-only with different group sizes
+
+<Warning>
+`int8dq` has issues with CUDA graph capture. Always use `--disable-cuda-graph` with this method.
+</Warning>
+
+### AMD GPU Quantization
+
+For AMD GPUs (CDNA3/CDNA4), use `quark_int4fp8_moe` to quantize MoE layers:
+
+```bash
+python -m sglang.launch_server \
+    --model-path deepseek-ai/DeepSeek-V3 \
+    --quantization quark_int4fp8_moe \
+    --port 30000
+```
+
+This quantizes:
+- MoE layers: weights to INT4, upcasted to FP8 for compute
+- Other layers: weights to FP8 directly
+
+## Pre-Quantized Model Sources
+
+<CardGroup cols={3}>
+  <Card title="Unsloth" icon="bolt" href="https://huggingface.co/unsloth">
+    High-quality quantized models
+  </Card>
+  <Card title="NVIDIA ModelOpt" icon="nvidia" href="https://huggingface.co/collections/nvidia/inference-optimized-checkpoints-with-model-optimizer">
+    NVIDIA-optimized models
+  </Card>
+  <Card title="NeuralMagic" icon="brain" href="https://huggingface.co/neuralmagic">
+    Sparse and quantized models
+  </Card>
+</CardGroup>
+
+<Warning>
+Always validate quantized models via benchmarks post-quantization to guard against quality degradation.
+</Warning>
+
+## Performance Impact
+
+### Memory Reduction
+
+| Precision | Memory vs FP16 | Typical Use Case |
+|-----------|----------------|------------------|
+| FP16/BF16 | 1.0× (baseline) | Full precision |
+| FP8 | 0.5× | Hopper/Blackwell GPUs |
+| INT8 | 0.5× | Broad compatibility |
+| FP4/INT4 | 0.25× | Maximum compression |
+
+### Throughput Improvements
+
+Quantization typically provides:
+- **1.5-2× throughput** with FP8/INT8
+- **2-3× throughput** with FP4/INT4  
+- **Lower latency** due to reduced memory bandwidth
+- **Higher batch sizes** due to memory savings
+
+## Known Limitations
+
+<AccordionGroup>
+  <Accordion title="Mixed-bit Quantization">
+    Not fully supported due to vLLM's layer fusion (e.g., QKV fusion). Different bit-widths within fused layers can cause compatibility issues.
+  </Accordion>
+  
+  <Accordion title="Quantized MoE Models">
+    May encounter issues due to kernel limitations. Try skipping problematic layers like `mlp.gate`.
+  </Accordion>
+  
+  <Accordion title="Quantized VLMs">
+    Limited support. Some format combinations may fail. AWQ format typically works best.
+  </Accordion>
+</AccordionGroup>
+
+## References
+
+- [GPTQModel](https://github.com/ModelCloud/GPTQModel)
+- [LLM Compressor](https://github.com/vllm-project/llm-compressor/)
+- [NVIDIA Model Optimizer (ModelOpt)](https://github.com/NVIDIA/Model-Optimizer)  
+- [Torchao: PyTorch Architecture Optimization](https://github.com/pytorch/ao)
+- [vLLM Quantization](https://docs.vllm.ai/en/latest/quantization/)
+- [auto-round](https://github.com/intel/auto-round)

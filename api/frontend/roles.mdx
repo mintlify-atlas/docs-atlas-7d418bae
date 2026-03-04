@@ -1,0 +1,272 @@
+---
+title: "Role Markers"
+description: "Structure conversations with system, user, and assistant roles"
+---
+
+## Overview
+
+Role markers structure your prompt programs into conversation turns. They help the language model understand the context and expected behavior by clearly delineating different parts of the conversation.
+
+## Available Roles
+
+### system()
+
+Defines system instructions or context that guides the model's behavior.
+
+```python
+sgl.system(content)
+```
+
+### user()
+
+Represents user input or questions.
+
+```python
+sgl.user(content)
+```
+
+### assistant()
+
+Represents the model's responses.
+
+```python
+sgl.assistant(content)
+```
+
+## Parameters
+
+<ParamField path="content" type="SglExpr | str" optional>
+  The content for this role turn. Can be a string or an SGLang expression (like `gen()`).
+  If omitted, creates empty role markers (useful with `_begin()` and `_end()` variants).
+</ParamField>
+
+## Usage
+
+### Basic Conversation
+
+```python
+import sglang as sgl
+
+@sgl.function
+def chat(s, user_message):
+    s += sgl.system("You are a helpful assistant.")
+    s += sgl.user(user_message)
+    s += sgl.assistant(sgl.gen("response", max_tokens=100))
+
+state = chat.run(user_message="What is Python?")
+print(state["response"])
+```
+
+### Multi-turn Conversation
+
+```python
+@sgl.function
+def multi_turn(s, context, question1, question2):
+    s += sgl.system(context)
+    
+    # First turn
+    s += sgl.user(question1)
+    s += sgl.assistant(sgl.gen("answer1", max_tokens=50))
+    
+    # Second turn
+    s += sgl.user(question2)
+    s += sgl.assistant(sgl.gen("answer2", max_tokens=50))
+
+state = multi_turn.run(
+    context="You are a math tutor.",
+    question1="What is 2+2?",
+    question2="What is 5*5?"
+)
+print(state["answer1"])
+print(state["answer2"])
+```
+
+### System Prompt with Instructions
+
+```python
+@sgl.function
+def structured_response(s, query):
+    s += sgl.system(
+        "You are a helpful assistant. Always format your responses as:\n"
+        "1. Brief answer\n"
+        "2. Detailed explanation\n"
+        "3. Example"
+    )
+    s += sgl.user(query)
+    s += sgl.assistant(sgl.gen("response", max_tokens=200))
+```
+
+### Empty Role Markers
+
+When content is omitted, role markers create empty turns:
+
+```python
+@sgl.function
+def with_context(s, context):
+    s += sgl.system()  # Empty system turn
+    s += context
+    s += sgl.user("Tell me about this topic.")
+    s += sgl.assistant(sgl.gen("response", max_tokens=100))
+```
+
+## Begin/End Variants
+
+For more control, you can use explicit begin/end markers:
+
+### system_begin() / system_end()
+
+```python
+sgl.system_begin()
+sgl.system_end()
+```
+
+### user_begin() / user_end()
+
+```python
+sgl.user_begin()
+sgl.user_end()
+```
+
+### assistant_begin() / assistant_end()
+
+```python
+sgl.assistant_begin()
+sgl.assistant_end()
+```
+
+### Usage with Begin/End
+
+```python
+@sgl.function
+def explicit_roles(s, instruction, question):
+    s += sgl.system_begin()
+    s += instruction
+    s += "\nAdditional context: Be concise."
+    s += sgl.system_end()
+    
+    s += sgl.user_begin()
+    s += question
+    s += sgl.user_end()
+    
+    s += sgl.assistant_begin()
+    s += sgl.gen("answer", max_tokens=100)
+    s += sgl.assistant_end()
+```
+
+## Best Practices
+
+### 1. Always Use System Role for Instructions
+
+```python
+# Good
+@sgl.function
+def good_example(s, query):
+    s += sgl.system("You are an expert in biology.")
+    s += sgl.user(query)
+    s += sgl.assistant(sgl.gen("response", max_tokens=100))
+
+# Avoid
+@sgl.function
+def bad_example(s, query):
+    s += "You are an expert in biology.\n"  # Not using role markers
+    s += query
+    s += sgl.gen("response", max_tokens=100)
+```
+
+### 2. Maintain Conversation Flow
+
+Always alternate between user and assistant roles:
+
+```python
+@sgl.function
+def proper_flow(s):
+    s += sgl.system("You are helpful.")
+    s += sgl.user("Question 1")
+    s += sgl.assistant(sgl.gen("a1", max_tokens=50))
+    s += sgl.user("Question 2")
+    s += sgl.assistant(sgl.gen("a2", max_tokens=50))
+```
+
+### 3. Use Roles for Few-shot Examples
+
+```python
+@sgl.function
+def few_shot_classification(s, text):
+    s += sgl.system("Classify text as positive or negative.")
+    
+    # Example 1
+    s += sgl.user("I love this product!")
+    s += sgl.assistant("positive")
+    
+    # Example 2
+    s += sgl.user("This is terrible.")
+    s += sgl.assistant("negative")
+    
+    # Actual query
+    s += sgl.user(text)
+    s += sgl.assistant(sgl.gen("classification", max_tokens=10))
+```
+
+### 4. Clear System Instructions
+
+```python
+@sgl.function
+def clear_instructions(s, code):
+    s += sgl.system(
+        "You are a code reviewer. Provide:\n"
+        "1. A brief summary\n"
+        "2. Issues found\n"
+        "3. Suggestions for improvement"
+    )
+    s += sgl.user(f"Review this code:\n{code}")
+    s += sgl.assistant(sgl.gen("review", max_tokens=300))
+```
+
+## Advanced Example: Contextualized Conversation
+
+```python
+@sgl.function
+def tutoring_session(s, topic, student_level, questions):
+    # Set context
+    s += sgl.system(
+        f"You are a tutor teaching {topic}. "
+        f"The student is at {student_level} level. "
+        "Adjust your explanations accordingly."
+    )
+    
+    # Process multiple questions
+    for i, question in enumerate(questions):
+        s += sgl.user(question)
+        s += sgl.assistant(sgl.gen(f"answer_{i}", max_tokens=150))
+        
+        # Follow-up clarification
+        s += sgl.user("Can you explain that more simply?")
+        s += sgl.assistant(sgl.gen(f"clarification_{i}", max_tokens=100))
+
+state = tutoring_session.run(
+    topic="algebra",
+    student_level="beginner",
+    questions=["What is a variable?", "How do I solve x + 5 = 10?"]
+)
+
+for i in range(2):
+    print(f"Q{i+1} Answer: {state[f'answer_{i}']}")
+    print(f"Q{i+1} Clarification: {state[f'clarification_{i}']}")
+```
+
+## Model Compatibility
+
+Role markers are automatically converted to the appropriate format for different backends:
+
+- **OpenAI**: Converted to message format with `role` and `content` fields
+- **Anthropic**: Converted to Claude's message format
+- **Open-source models**: Applied using the model's chat template
+
+You don't need to worry about backend-specific formatting - SGLang handles this automatically.
+
+## See Also
+
+- [@sglang.function](/api/frontend/function) - Define prompt programs
+- [gen()](/api/frontend/gen) - Generate model responses
+- [select()](/api/frontend/select) - Choose from options
+- [Multi-modal inputs](/api/frontend/multimodal) - Images and videos in conversations

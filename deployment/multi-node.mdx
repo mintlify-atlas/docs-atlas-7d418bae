@@ -1,0 +1,603 @@
+---
+title: Multi-Node Deployment
+description: Deploy SGLang across multiple nodes for large-scale distributed inference
+---
+
+## Overview
+
+Multi-node deployment enables SGLang to serve large models that exceed single-node GPU memory or require high throughput. This guide covers tensor parallelism, expert parallelism, and prefill-decode disaggregation across nodes.
+
+## Prerequisites
+
+- Multiple compute nodes with GPUs
+- High-speed interconnect (InfiniBand, RoCE, or high-bandwidth Ethernet)
+- Consistent network topology between nodes
+- Shared storage or synchronized model weights
+- NCCL 2.28.3 or later
+
+## Basic Multi-Node Setup
+
+### Two-Node Tensor Parallelism
+
+Deploy a large model across two nodes with 8 GPUs each:
+
+```bash
+# Node 0 (master)
+python3 -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-405B-Instruct \
+  --tp 16 \
+  --dist-init-addr 172.16.4.52:20000 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --host 0.0.0.0 \
+  --port 30000
+
+# Node 1 (worker)
+python3 -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-405B-Instruct \
+  --tp 16 \
+  --dist-init-addr 172.16.4.52:20000 \
+  --nnodes 2 \
+  --node-rank 1
+```
+
+### Key Parameters
+
+| Parameter | Description | Example |
+|-----------|-------------|----------|
+| `--tp` | Total tensor parallel size (GPUs across all nodes) | `16` |
+| `--dist-init-addr` | Master node IP and port for coordination | `192.168.1.10:20000` |
+| `--nnodes` | Total number of nodes | `2` |
+| `--node-rank` | Rank of current node (0 for master) | `0` or `1` |
+
+## SLURM Deployment
+
+For HPC clusters with SLURM:
+
+```bash
+#!/bin/bash -l
+
+#SBATCH -o SLURM_Logs/%x_%j_master.out
+#SBATCH -e SLURM_Logs/%x_%j_master.err
+#SBATCH -D ./
+#SBATCH -J Llama-405B-Online-Inference-TP16-SGL
+
+#SBATCH --nodes=2
+#SBATCH --ntasks=2
+#SBATCH --ntasks-per-node=1  # Ensure 1 task per node
+#SBATCH --cpus-per-task=18
+#SBATCH --mem=224GB
+#SBATCH --partition="gpu"
+#SBATCH --gres=gpu:8
+#SBATCH --time=12:00:00
+
+echo "[INFO] Activating environment on node $SLURM_PROCID"
+if ! source ENV_FOLDER/bin/activate; then
+    echo "[ERROR] Failed to activate environment" >&2
+    exit 1
+fi
+
+# Define parameters
+model=MODEL_PATH
+tp_size=16
+
+echo "[INFO] Running inference"
+echo "[INFO] Model: $model"
+echo "[INFO] TP Size: $tp_size"
+
+# Set NCCL initialization address using the hostname of the head node
+HEAD_NODE=$(scontrol show hostname "$SLURM_NODELIST" | head -n 1)
+NCCL_INIT_ADDR="${HEAD_NODE}:8000"
+echo "[INFO] NCCL_INIT_ADDR: $NCCL_INIT_ADDR"
+
+# Launch the model server on each node using SLURM
+srun --ntasks=2 --nodes=2 --output="SLURM_Logs/%x_%j_node$SLURM_NODEID.out" \
+    --error="SLURM_Logs/%x_%j_node$SLURM_NODEID.err" \
+    python3 -m sglang.launch_server \
+    --model-path "$model" \
+    --grammar-backend "xgrammar" \
+    --tp "$tp_size" \
+    --dist-init-addr "$NCCL_INIT_ADDR" \
+    --nnodes 2 \
+    --node-rank "$SLURM_NODEID" &
+
+# Wait for the NCCL server to be ready on port 30000
+while ! nc -z "$HEAD_NODE" 30000; do
+    sleep 1
+    echo "[INFO] Waiting for $HEAD_NODE:30000 to accept connections"
+done
+
+echo "[INFO] $HEAD_NODE:30000 is ready to accept connections"
+
+# Keep the script running until the SLURM job times out
+wait
+```
+
+Submit the job:
+
+```bash
+sbatch slurm_sglang.sh
+```
+
+## MoE Models with Expert Parallelism
+
+For DeepSeek-V3/R1 and other MoE models:
+
+```bash
+# Node 0
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 16 \
+  --ep 16 \
+  --dist-init-addr 172.16.4.52:20000 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --moe-a2a-backend deepep \
+  --enable-dp-attention \
+  --enable-dp-lm-head \
+  --dp-size 16
+
+# Node 1
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-V3 \
+  --tp 16 \
+  --ep 16 \
+  --dist-init-addr 172.16.4.52:20000 \
+  --nnodes 2 \
+  --node-rank 1 \
+  --moe-a2a-backend deepep \
+  --enable-dp-attention \
+  --enable-dp-lm-head \
+  --dp-size 16
+```
+
+### MoE-Specific Parameters
+
+| Parameter | Description | Recommended |
+|-----------|-------------|-------------|
+| `--ep` | Expert parallel size | Same as `--tp` |
+| `--moe-a2a-backend` | All-to-all communication backend | `deepep` |
+| `--enable-dp-attention` | Enable data-parallel attention | For large MoE |
+| `--enable-dp-lm-head` | Enable data-parallel LM head | For large MoE |
+| `--dp-size` | Data parallel size | Same as `--tp` |
+| `--ep-num-redundant-experts` | Redundant expert copies | `32` for DeepSeek |
+
+## RDMA/InfiniBand Configuration
+
+For optimal performance with RDMA:
+
+### Verify RDMA Setup
+
+```bash
+# Check InfiniBand status
+ibstatus
+
+# List RDMA devices
+rdma link show
+
+# Check device mapping
+ibdev2netdev
+
+# Test RDMA bandwidth
+# On server
+ib_write_bw
+
+# On client
+ib_write_bw <server-ip>
+```
+
+### NCCL Environment Variables
+
+```bash
+# Enable InfiniBand
+export NCCL_IB_DISABLE=0
+
+# GID index for RoCE
+export NCCL_IB_GID_INDEX=3
+
+# TCP for RoCE
+export NCCL_IB_TC=136
+
+# Service level
+export NCCL_IB_SL=5
+
+# QPs per connection
+export NCCL_IB_QPS_PER_CONNECTION=8
+export NCCL_IB_SPLIT_DATA_ON_QPS=1
+
+# Exclude specific HCAs
+export NCCL_IB_HCA="^=mlx5_0,mlx5_5,mlx5_6"
+
+# Channel configuration
+export NCCL_MIN_NCHANNELS=4
+
+# Disable network plugins if not needed
+export NCCL_NET_PLUGIN=none
+
+# Debug level
+export NCCL_DEBUG=INFO  # Use TRACE for detailed debugging
+```
+
+### Launch with RDMA
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path <model> \
+  --tp 16 \
+  --dist-init-addr 172.16.4.52:20000 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --disaggregation-ib-device mlx5_bond_0,mlx5_bond_1,mlx5_bond_2,mlx5_bond_3
+```
+
+## Prefill-Decode Disaggregation
+
+Separate prefill and decode stages for optimal resource utilization:
+
+### Prefill Nodes
+
+```bash
+# Prefill Node 0
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --disaggregation-mode prefill \
+  --tp 16 \
+  --dp-size 16 \
+  --dist-init-addr 172.16.4.52:20000 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --chunked-prefill-size 524288 \
+  --max-prefill-tokens 32768 \
+  --disable-radix-cache \
+  --disaggregation-ib-device mlx5_bond_0,mlx5_bond_1,mlx5_bond_2,mlx5_bond_3 \
+  --port 30000
+
+# Prefill Node 1
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --disaggregation-mode prefill \
+  --tp 16 \
+  --dp-size 16 \
+  --dist-init-addr 172.16.4.52:20000 \
+  --nnodes 2 \
+  --node-rank 1 \
+  --chunked-prefill-size 524288 \
+  --max-prefill-tokens 32768 \
+  --disable-radix-cache \
+  --disaggregation-ib-device mlx5_bond_0,mlx5_bond_1,mlx5_bond_2,mlx5_bond_3
+```
+
+### Decode Nodes
+
+```bash
+# Decode Node 0
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --disaggregation-mode decode \
+  --tp 16 \
+  --dp-size 16 \
+  --dist-init-addr 172.16.5.52:20000 \
+  --nnodes 2 \
+  --node-rank 0 \
+  --cuda-graph-max-bs 64 \
+  --max-running-requests 2048 \
+  --disaggregation-ib-device mlx5_bond_0,mlx5_bond_1,mlx5_bond_2,mlx5_bond_3 \
+  --port 30001
+
+# Decode Node 1
+python3 -m sglang.launch_server \
+  --model-path deepseek-ai/DeepSeek-R1 \
+  --disaggregation-mode decode \
+  --tp 16 \
+  --dp-size 16 \
+  --dist-init-addr 172.16.5.52:20000 \
+  --nnodes 2 \
+  --node-rank 1 \
+  --cuda-graph-max-bs 64 \
+  --max-running-requests 2048 \
+  --disaggregation-ib-device mlx5_bond_0,mlx5_bond_1,mlx5_bond_2,mlx5_bond_3
+```
+
+### Router/Load Balancer
+
+```bash
+python -m sglang_router.launch_router \
+  --pd-disaggregation \
+  --prefill http://172.16.4.52:30000 \
+  --decode http://172.16.5.52:30001 \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+## Kubernetes Multi-Node Deployment
+
+See the [Kubernetes deployment guide](/deployment/kubernetes#multi-node-distributed-deployment) for StatefulSet and LeaderWorkerSet configurations.
+
+### Quick Example
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: distributed-sglang
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: distributed-sglang
+  serviceName: ""
+  template:
+    metadata:
+      labels:
+        app: distributed-sglang
+    spec:
+      hostNetwork: true
+      containers:
+      - name: sglang-container
+        image: lmsysorg/sglang:latest
+        command:
+        - python3
+        - -m
+        - sglang.launch_server
+        - --model
+        - /llm-folder
+        - --dist-init-addr
+        - sglang-0.default.svc.cluster.local:5000
+        - --tensor-parallel-size
+        - "16"
+        - --nnodes
+        - "2"
+        - --node-rank
+        - $(POD_INDEX)
+        env:
+        - name: POD_INDEX
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+        resources:
+          limits:
+            nvidia.com/gpu: "8"
+```
+
+## Network Configuration
+
+### Firewall Rules
+
+Open required ports between nodes:
+
+```bash
+# NCCL coordination port (specified in --dist-init-addr)
+sudo ufw allow 20000/tcp
+
+# Server port (node 0 only)
+sudo ufw allow 30000/tcp
+
+# NCCL communication (ephemeral ports)
+sudo ufw allow 50000:51000/tcp
+```
+
+### Network Interface Selection
+
+```bash
+# Specify network interface for NCCL
+export NCCL_SOCKET_IFNAME=eth0
+
+# For GLOO backend (CPU communication)
+export GLOO_SOCKET_IFNAME=eth0
+```
+
+### Network Topology
+
+For optimal performance, ensure:
+
+1. **Low latency**: < 10μs for InfiniBand, < 100μs for Ethernet
+2. **High bandwidth**: ≥ 200 Gbps per GPU
+3. **Consistent topology**: Same switch for all nodes (ideal)
+
+## Performance Optimization
+
+### NCCL Tuning
+
+```bash
+# Algorithm selection
+export NCCL_ALGO=Ring  # or Tree, CollNetDirect
+
+# Buffer sizes
+export NCCL_BUFFSIZE=8388608  # 8MB
+export NCCL_P2P_LEVEL=SYS  # Enable P2P
+
+# Topology awareness
+export NCCL_TOPO_FILE=/path/to/topo.xml
+
+# Cross-NIC communication
+export NCCL_CROSS_NIC=1
+```
+
+### Memory Configuration
+
+```bash
+# Increase shared memory
+sudo sysctl -w kernel.shmmax=68719476736  # 64GB
+sudo sysctl -w kernel.shmall=16777216
+
+# Locked memory (for RDMA)
+ulimit -l unlimited
+```
+
+### CPU Affinity
+
+```bash
+# Enable CPU affinity
+export SGLANG_SET_CPU_AFFINITY=true
+
+# NUMA binding
+numactl --cpunodebind=0 --membind=0 python3 -m sglang.launch_server ...
+```
+
+## Monitoring
+
+### NCCL Logs
+
+```bash
+# Enable verbose NCCL logging
+export NCCL_DEBUG=TRACE
+export NCCL_DEBUG_SUBSYS=ALL
+```
+
+### Network Bandwidth
+
+```bash
+# Monitor network utilization
+iftop -i eth0
+
+# RDMA statistics
+watch -n 1 'rdma statistic show'
+
+# InfiniBand counters
+perfquery
+```
+
+### GPU Utilization
+
+```bash
+# Monitor all nodes
+for node in node1 node2; do
+  ssh $node 'nvidia-smi dmon -s ucm'
+done
+```
+
+## Troubleshooting
+
+### NCCL Initialization Failures
+
+**Symptoms:**
+- "NCCL initialization failed"
+- Timeout waiting for other nodes
+
+**Solutions:**
+```bash
+# Verify network connectivity
+ping <other-node-ip>
+telnet <other-node-ip> 20000
+
+# Check firewall
+sudo ufw status
+
+# Verify NCCL can see GPUs
+export NCCL_DEBUG=INFO
+python3 -c "import torch; print(torch.cuda.nccl.version())"
+
+# Test with nccl-tests
+cd /opt/nccl-tests
+./build/all_reduce_perf -b 8 -e 256M -f 2 -g 8
+```
+
+### RDMA Errors
+
+**Symptoms:**
+- "ibv_create_qp failed"
+- "RDMA connection refused"
+
+**Solutions:**
+```bash
+# Check RDMA devices
+ibv_devices
+ibv_devinfo
+
+# Verify GID index
+show_gids | grep mlx5
+
+# Test RDMA communication
+ib_send_bw -d mlx5_0 -a <other-node-ip>
+
+# Check MTU
+ip link show | grep mtu
+ifconfig <interface> mtu 9000  # Set jumbo frames
+```
+
+### Model Loading Issues
+
+**Symptoms:**
+- Different model versions on nodes
+- Checksum mismatch
+
+**Solutions:**
+```bash
+# Verify model hash on all nodes
+for node in node1 node2; do
+  ssh $node 'sha256sum /path/to/model/pytorch_model.bin'
+done
+
+# Use shared storage (NFS/Lustre)
+mount -t nfs nfs-server:/models /mnt/models
+```
+
+### Out of Memory
+
+```bash
+# Reduce memory usage
+--mem-fraction-static 0.85  # Default 0.9
+--max-running-requests 32   # Reduce batch size
+--chunked-prefill-size 8192 # Smaller chunks
+```
+
+### Slow Performance
+
+```bash
+# Profile NCCL operations
+export NCCL_PROFILE=1
+
+# Check for CPU throttling
+lscpu | grep MHz
+
+# Monitor PCIe bandwidth
+nvidia-smi nvlink -gt d
+```
+
+## Best Practices
+
+1. **Use InfiniBand/RoCE**: Essential for multi-node at scale
+2. **Enable hostNetwork**: Reduces latency in containerized environments
+3. **Set privileged mode**: Required for RDMA device access
+4. **Synchronize clocks**: Use NTP to avoid timeout issues
+5. **Test incrementally**: Validate 2 nodes before scaling to more
+6. **Monitor NCCL**: Keep `NCCL_DEBUG=INFO` in production
+7. **Use static IPs**: Avoid DNS resolution delays
+8. **Verify topology**: Run `nvidia-smi topo -m` on all nodes
+
+## Example Configurations
+
+### 4-Node Llama 405B (FP16)
+
+```bash
+# 32 GPUs total, TP=32
+for i in 0 1 2 3; do
+  ssh node$i "python3 -m sglang.launch_server \
+    --model-path meta-llama/Meta-Llama-3.1-405B-Instruct \
+    --tp 32 \
+    --dist-init-addr node0:20000 \
+    --nnodes 4 \
+    --node-rank $i"
+done
+```
+
+### 2-Node DeepSeek-V3
+
+```bash
+# With DeepEP backend
+for i in 0 1; do
+  ssh node$i "python3 -m sglang.launch_server \
+    --model-path deepseek-ai/DeepSeek-V3 \
+    --tp 16 --ep 16 \
+    --moe-a2a-backend deepep \
+    --dist-init-addr node0:20000 \
+    --nnodes 2 \
+    --node-rank $i"
+done
+```
+
+## Next Steps
+
+- [Kubernetes Deployment](/deployment/kubernetes) - Orchestrate multi-node on K8s
+- [Cloud Platforms](/deployment/cloud-platforms) - Deploy across cloud regions
+- [Docker Deployment](/deployment/docker) - Containerize multi-node setups

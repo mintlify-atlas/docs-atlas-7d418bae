@@ -1,0 +1,583 @@
+---
+title: Chat Completions
+description: OpenAI-compatible chat completions API
+---
+
+# Chat Completions
+
+The chat completions endpoint generates responses in a conversational format. This endpoint is compatible with OpenAI's `/v1/chat/completions` API.
+
+## Request
+
+```bash
+curl http://localhost:30000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "meta-llama/Llama-3.1-8B-Instruct",
+    "messages": [
+      {"role": "user", "content": "What is the capital of France?"}
+    ],
+    "max_completion_tokens": 128,
+    "temperature": 0.7
+  }'
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY"
+)
+
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the capital of France?"}
+    ],
+    max_completion_tokens=128,
+    temperature=0.7
+)
+
+print(response.choices[0].message.content)
+```
+
+## Parameters
+
+### Required
+
+<ParamField path="messages" type="array" required>
+  Array of message objects in the conversation.
+
+  <ParamField path="role" type="string" required>
+    Role of the message sender: `system`, `user`, `assistant`, `tool`, `function`, or `developer`.
+  </ParamField>
+
+  <ParamField path="content" type="string | array" required>
+    Message content. Can be:
+    - A string for text-only messages
+    - An array of content parts for multimodal messages:
+      - `{"type": "text", "text": "..."}`
+      - `{"type": "image_url", "image_url": {"url": "..."}}`
+      - `{"type": "video_url", "video_url": {"url": "..."}}`
+      - `{"type": "audio_url", "audio_url": {"url": "..."}}`
+  </ParamField>
+
+  <ParamField path="name" type="string">
+    Name of the message sender.
+  </ParamField>
+
+  <ParamField path="tool_calls" type="array">
+    Tool calls made by the assistant (for assistant messages).
+  </ParamField>
+
+  <ParamField path="tool_call_id" type="string">
+    ID of the tool call this message is responding to (for tool messages).
+  </ParamField>
+</ParamField>
+
+<ParamField path="model" type="string" required>
+  Model name. Supports LoRA adapters via `base-model:adapter-name` syntax.
+</ParamField>
+
+### Sampling Parameters
+
+<ParamField path="max_completion_tokens" type="integer">
+  Maximum number of tokens to generate. Replaces deprecated `max_tokens`.
+</ParamField>
+
+<ParamField path="max_tokens" type="integer">
+  **Deprecated**: Use `max_completion_tokens` instead.
+</ParamField>
+
+<ParamField path="temperature" type="number" default="1.0">
+  Sampling temperature between 0 and 2. Higher values make output more random.
+</ParamField>
+
+<ParamField path="top_p" type="number" default="1.0">
+  Nucleus sampling threshold.
+</ParamField>
+
+<ParamField path="top_k" type="integer">
+  Only sample from the top K tokens.
+</ParamField>
+
+<ParamField path="min_p" type="number">
+  Minimum probability threshold for sampling.
+</ParamField>
+
+<ParamField path="n" type="integer" default="1">
+  Number of chat completion choices to generate.
+</ParamField>
+
+<ParamField path="seed" type="integer">
+  Random seed for deterministic generation.
+</ParamField>
+
+<ParamField path="stop" type="string | array">
+  Stop sequences.
+</ParamField>
+
+<ParamField path="stop_token_ids" type="array">
+  Stop token IDs.
+</ParamField>
+
+### Penalization
+
+<ParamField path="frequency_penalty" type="number" default="0.0">
+  Penalizes tokens based on frequency. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="presence_penalty" type="number" default="0.0">
+  Penalizes tokens based on presence. Range: [-2.0, 2.0].
+</ParamField>
+
+<ParamField path="repetition_penalty" type="number" default="1.0">
+  Penalizes repeated tokens.
+</ParamField>
+
+### Structured Output
+
+<ParamField path="response_format" type="object">
+  Format of the response:
+  - `{"type": "text"}` - Plain text (default)
+  - `{"type": "json_object"}` - Valid JSON object
+  - `{"type": "json_schema", "json_schema": {...}}` - JSON matching schema
+</ParamField>
+
+<ParamField path="regex" type="string">
+  Regular expression for constrained generation.
+</ParamField>
+
+<ParamField path="ebnf" type="string">
+  EBNF grammar for constrained generation.
+</ParamField>
+
+### Tools & Function Calling
+
+<ParamField path="tools" type="array">
+  List of tools available to the model.
+
+  <ParamField path="type" type="string">
+    Always `"function"`.
+  </ParamField>
+
+  <ParamField path="function" type="object">
+    Function definition.
+
+    <ParamField path="name" type="string">
+      Function name.
+    </ParamField>
+
+    <ParamField path="description" type="string">
+      Function description.
+    </ParamField>
+
+    <ParamField path="parameters" type="object">
+      JSON schema for function parameters.
+    </ParamField>
+
+    <ParamField path="strict" type="boolean" default="false">
+      Whether to enforce strict schema validation.
+    </ParamField>
+  </ParamField>
+</ParamField>
+
+<ParamField path="tool_choice" type="string | object" default="auto">
+  Controls tool usage:
+  - `auto`: Model decides whether to call tools
+  - `none`: Model will not call tools
+  - `required`: Model must call at least one tool
+  - `{"type": "function", "function": {"name": "..."}}`: Force specific tool
+</ParamField>
+
+### Logging & Debugging
+
+<ParamField path="logprobs" type="boolean" default="false">
+  Whether to return log probabilities.
+</ParamField>
+
+<ParamField path="top_logprobs" type="integer">
+  Number of top log probabilities to return (requires `logprobs=true`).
+</ParamField>
+
+<ParamField path="logit_bias" type="object">
+  Bias certain tokens. Maps token IDs to bias values between -100 and 100.
+</ParamField>
+
+### Streaming
+
+<ParamField path="stream" type="boolean" default="false">
+  Whether to stream the response.
+</ParamField>
+
+<ParamField path="stream_options" type="object">
+  Streaming options:
+  - `include_usage`: Include usage statistics in final chunk
+  - `continuous_usage_stats`: Include usage stats in each chunk
+</ParamField>
+
+### Multimodal
+
+<ParamField path="max_dynamic_patch" type="integer">
+  Maximum number of dynamic patches for vision models.
+</ParamField>
+
+<ParamField path="min_dynamic_patch" type="integer">
+  Minimum number of dynamic patches for vision models.
+</ParamField>
+
+### Reasoning Models
+
+<ParamField path="reasoning_effort" type="string" default="medium">
+  Constrains reasoning effort for reasoning models:
+  - `low`: Least effort, faster responses
+  - `medium`: Balanced effort
+  - `high`: Most effort, more thorough reasoning
+  
+  Currently only supported for OpenAI models in harmony path (GPT-OSS models).
+</ParamField>
+
+<ParamField path="separate_reasoning" type="boolean" default="true">
+  Separate reasoning content from final response.
+</ParamField>
+
+<ParamField path="stream_reasoning" type="boolean" default="true">
+  Stream reasoning tokens during generation.
+</ParamField>
+
+### SGLang Extensions
+
+<ParamField path="ignore_eos" type="boolean" default="false">
+  Continue generation even after EOS token.
+</ParamField>
+
+<ParamField path="skip_special_tokens" type="boolean" default="true">
+  Whether to skip special tokens in output.
+</ParamField>
+
+<ParamField path="no_stop_trim" type="boolean" default="false">
+  Do not trim stop sequences from output.
+</ParamField>
+
+<ParamField path="stop_regex" type="string | array">
+  Regular expression(s) to use as stop conditions.
+</ParamField>
+
+<ParamField path="min_tokens" type="integer" default="0">
+  Minimum number of tokens to generate.
+</ParamField>
+
+<ParamField path="continue_final_message" type="boolean" default="false">
+  Continue from the last assistant message.
+</ParamField>
+
+<ParamField path="lora_path" type="string">
+  Path to LoRA adapter weights.
+</ParamField>
+
+<ParamField path="chat_template_kwargs" type="object">
+  Additional kwargs to pass to the chat template.
+</ParamField>
+
+<ParamField path="custom_logit_processor" type="string">
+  Custom logit processor for advanced sampling control.
+</ParamField>
+
+<ParamField path="return_hidden_states" type="boolean" default="false">
+  Return hidden states from the model.
+</ParamField>
+
+<ParamField path="return_routed_experts" type="boolean" default="false">
+  Return expert routing information for MoE models.
+</ParamField>
+
+<ParamField path="return_cached_tokens_details" type="boolean" default="false">
+  Return detailed cache hit information.
+</ParamField>
+
+## Response
+
+<ResponseField name="id" type="string">
+  Unique identifier for the chat completion.
+</ResponseField>
+
+<ResponseField name="object" type="string">
+  Always `"chat.completion"`.
+</ResponseField>
+
+<ResponseField name="created" type="integer">
+  Unix timestamp of creation time.
+</ResponseField>
+
+<ResponseField name="model" type="string">
+  Model used for generation.
+</ResponseField>
+
+<ResponseField name="choices" type="array">
+  Array of chat completion choices.
+
+  <ResponseField name="index" type="integer">
+    Choice index.
+  </ResponseField>
+
+  <ResponseField name="message" type="object">
+    The generated message.
+
+    <ResponseField name="role" type="string">
+      Role of the message (usually `"assistant"`).
+    </ResponseField>
+
+    <ResponseField name="content" type="string | null">
+      Message content.
+    </ResponseField>
+
+    <ResponseField name="reasoning_content" type="string | null">
+      Reasoning content for reasoning models.
+    </ResponseField>
+
+    <ResponseField name="tool_calls" type="array | null">
+      Tool calls made by the model.
+
+      <ResponseField name="id" type="string">
+        Tool call ID.
+      </ResponseField>
+
+      <ResponseField name="type" type="string">
+        Always `"function"`.
+      </ResponseField>
+
+      <ResponseField name="function" type="object">
+        <ResponseField name="name" type="string">
+          Function name.
+        </ResponseField>
+
+        <ResponseField name="arguments" type="string">
+          Function arguments as JSON string.
+        </ResponseField>
+      </ResponseField>
+    </ResponseField>
+  </ResponseField>
+
+  <ResponseField name="logprobs" type="object | null">
+    Log probability information.
+
+    <ResponseField name="content" type="array">
+      Log probabilities for each token.
+
+      <ResponseField name="token" type="string">
+        The token.
+      </ResponseField>
+
+      <ResponseField name="logprob" type="number">
+        Log probability of the token.
+      </ResponseField>
+
+      <ResponseField name="bytes" type="array">
+        UTF-8 bytes of the token.
+      </ResponseField>
+
+      <ResponseField name="top_logprobs" type="array">
+        Top alternative tokens and their log probabilities.
+      </ResponseField>
+    </ResponseField>
+  </ResponseField>
+
+  <ResponseField name="finish_reason" type="string">
+    Reason for completion end:
+    - `stop`: Natural stop or stop sequence
+    - `length`: Max tokens reached
+    - `tool_calls`: Model called a tool
+    - `content_filter`: Content filtering
+    - `abort`: Request aborted
+  </ResponseField>
+
+  <ResponseField name="matched_stop" type="integer | string | null">
+    The stop sequence that was matched.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="usage" type="object">
+  Token usage statistics.
+
+  <ResponseField name="prompt_tokens" type="integer">
+    Tokens in the prompt.
+  </ResponseField>
+
+  <ResponseField name="completion_tokens" type="integer">
+    Tokens in the completion.
+  </ResponseField>
+
+  <ResponseField name="total_tokens" type="integer">
+    Total tokens used.
+  </ResponseField>
+
+  <ResponseField name="prompt_tokens_details" type="object">
+    <ResponseField name="cached_tokens" type="integer">
+      Number of cached tokens.
+    </ResponseField>
+  </ResponseField>
+
+  <ResponseField name="reasoning_tokens" type="integer">
+    Tokens used for reasoning (reasoning models).
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="sglext" type="object">
+  SGLang-specific extensions.
+
+  <ResponseField name="routed_experts" type="string">
+    Expert routing information for MoE models.
+  </ResponseField>
+
+  <ResponseField name="cached_tokens_details" type="object">
+    Detailed cache information.
+
+    <ResponseField name="device" type="integer">
+      Tokens from GPU cache.
+    </ResponseField>
+
+    <ResponseField name="host" type="integer">
+      Tokens from CPU cache.
+    </ResponseField>
+
+    <ResponseField name="storage" type="integer">
+      Tokens from storage backend.
+    </ResponseField>
+
+    <ResponseField name="storage_backend" type="string">
+      Storage backend type.
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+## Streaming Response
+
+When `stream=true`, responses are sent as Server-Sent Events:
+
+```json
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"meta-llama/Llama-3.1-8B-Instruct","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"meta-llama/Llama-3.1-8B-Instruct","choices":[{"index":0,"delta":{"content":"The"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"meta-llama/Llama-3.1-8B-Instruct","choices":[{"index":0,"delta":{"content":" capital"},"logprobs":null,"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"meta-llama/Llama-3.1-8B-Instruct","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":15,"completion_tokens":8,"total_tokens":23}}
+
+data: [DONE]
+```
+
+## Examples
+
+### Basic Chat
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:30000/v1", api_key="EMPTY")
+
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Explain quantum computing in simple terms."}
+    ],
+    max_completion_tokens=256
+)
+
+print(response.choices[0].message.content)
+```
+
+### Streaming Chat
+
+```python
+stream = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Write a poem about AI"}],
+    max_completion_tokens=512,
+    stream=True
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
+### Function Calling
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"},
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+                },
+                "required": ["location"]
+            }
+        }
+    }
+]
+
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "What's the weather in Paris?"}],
+    tools=tools,
+    tool_choice="auto"
+)
+
+if response.choices[0].message.tool_calls:
+    tool_call = response.choices[0].message.tool_calls[0]
+    print(f"Function: {tool_call.function.name}")
+    print(f"Arguments: {tool_call.function.arguments}")
+```
+
+### JSON Output
+
+```python
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "Generate a product review as JSON"}],
+    response_format={"type": "json_object"},
+    max_completion_tokens=128
+)
+
+import json
+review = json.loads(response.choices[0].message.content)
+print(review)
+```
+
+### Multimodal (Vision)
+
+```python
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.2-11B-Vision-Instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/image.jpg"}
+                }
+            ]
+        }
+    ],
+    max_completion_tokens=256
+)
+
+print(response.choices[0].message.content)
+```
+
+## See Also
+
+- [Completions](/api/http/completions) - Text completion format
+- [Embeddings](/api/http/embeddings) - Generate embeddings
+- [Models](/api/http/models) - List available models

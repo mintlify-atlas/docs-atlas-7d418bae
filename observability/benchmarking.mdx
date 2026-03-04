@@ -1,0 +1,485 @@
+---
+title: Benchmarking
+description: Benchmark SGLang server performance and throughput
+---
+
+## Overview
+
+SGLang includes `bench_serving.py`, a comprehensive benchmarking tool for measuring serving performance under various load patterns. It supports multiple backends, datasets, and request distributions.
+
+## Quick Start
+
+### Basic Benchmark
+
+Run a simple benchmark with random prompts:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --num-prompts 100 \
+  --dataset-name random \
+  --random-input 128 \
+  --random-output 128
+```
+
+This sends 100 requests with 128 input tokens and 128 output tokens as fast as possible.
+
+### Full Benchmark Example
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --host http://localhost:30000 \
+  --dataset-name sharegpt \
+  --num-prompts 1000 \
+  --request-rate 10 \
+  --max-concurrency 50
+```
+
+## Command-Line Options
+
+### Backend Configuration
+
+**`--backend`** (required)
+Specify the serving backend:
+- `sglang`: Native SGLang `/generate` endpoint
+- `sglang-oai`: OpenAI-compatible completions API
+- `sglang-oai-chat`: OpenAI-compatible chat completions API
+- `vllm`, `vllm-chat`, `lmdeploy`, `lmdeploy-chat`: Other backends
+
+**`--host`**
+Server endpoint (default: `http://localhost:30000`)
+
+### Dataset Options
+
+**`--dataset-name`**
+Dataset to use for benchmarking:
+- `random`: Randomly generated prompts
+- `sharegpt`: ShareGPT conversation dataset
+- `arxiv`: ArXiv paper abstracts
+- `mooncake`: Time-based trace replay
+
+**`--dataset-path`**
+Path to custom dataset file (JSON format)
+
+#### Random Dataset Options
+
+**`--random-input`**
+Number of input tokens for random prompts (default: 1024)
+
+**`--random-output`**
+Number of output tokens for random prompts (default: 128)
+
+**`--random-range-ratio`**
+Randomness range ratio (default: 1.0)
+- Sets token length variance: ± `ratio * length / 2`
+- Example: `--random-range-ratio 0.5` with `--random-input 1024` gives range [768, 1280]
+
+### Load Configuration
+
+**`--num-prompts`**
+Number of requests to send (required)
+
+**`--request-rate`**
+Request rate in requests/second (default: `inf` - send all at once)
+- Use `inf` for throughput benchmarks
+- Use finite values (e.g., `10`) for latency benchmarks
+
+**`--max-concurrency`**
+Maximum number of concurrent requests (default: unlimited)
+
+**`--warmup-requests`**
+Number of warmup requests before benchmark (default: 1)
+
+### Output Options
+
+**`--output-file`**
+Path to save detailed results (JSON format)
+
+**`--disable-tqdm`**
+Disable progress bar
+
+**`--plot-throughput`**
+Plot throughput over time (requires `termplotlib` and `gnuplot`)
+
+### Advanced Options
+
+**`--disable-stream`**
+Disable streaming responses (non-streaming mode)
+
+**`--disable-ignore-eos`**
+Respect EOS tokens (default: ignore EOS for consistent output lengths)
+
+**`--return-logprob`**
+Return log probabilities (SGLang native API only)
+
+**`--return-routed-experts`**
+Return routed expert information for MoE models
+
+**`--extra-request-body`**
+JSON string with additional request parameters
+
+**`--header`**
+Custom HTTP headers (format: `key:value`)
+
+### Multi-Turn Chat
+
+**`--multi-turn`**
+Enable multi-turn conversation mode (chat backends only)
+
+**`--num-turns`**
+Number of turns per conversation (default: 1)
+
+### LoRA Benchmarking
+
+**`--lora-name`**
+LoRA adapter names (space-separated list)
+
+**`--lora-request-distribution`**
+Distribution of LoRA requests:
+- `uniform`: Randomly select from all adapters
+- `distinct`: Round-robin through adapters
+- `skewed`: Zipf distribution (use with `--lora-zipf-alpha`)
+
+**`--lora-zipf-alpha`**
+Alpha parameter for Zipf distribution (default: 1.0)
+
+## Benchmark Metrics
+
+### Output Metrics
+
+After completion, `bench_serving` reports:
+
+**Throughput:**
+- `request_throughput`: Requests per second
+- `input_throughput`: Input tokens per second
+- `output_throughput`: Output tokens per second
+- `total_throughput`: Total tokens per second
+- `max_output_tokens_per_s`: Peak token generation rate
+
+**Latency:**
+- `mean_ttft_ms`: Mean time to first token
+- `median_ttft_ms`: Median TTFT
+- `p99_ttft_ms`: 99th percentile TTFT
+- `mean_tpot_ms`: Mean time per output token
+- `mean_itl_ms`: Mean inter-token latency
+- `p99_itl_ms`: 99th percentile ITL
+- `mean_e2e_latency_ms`: Mean end-to-end latency
+- `p99_e2e_latency_ms`: 99th percentile E2E latency
+
+**Load:**
+- `completed`: Number of successful requests
+- `concurrency`: Average concurrent requests
+- `max_concurrent_requests`: Peak concurrent requests
+
+### Example Output
+
+```
+Benchmark Results:
+============================================================
+Total time: 45.23 seconds
+Completed: 1000/1000 requests
+
+Throughput:
+  Requests/s:        22.10
+  Input tokens/s:    2250.5
+  Output tokens/s:   2827.3
+  Total tokens/s:    5077.8
+
+Latency:
+  Mean TTFT:         125.3 ms
+  Median TTFT:       98.2 ms
+  P99 TTFT:          450.1 ms
+  
+  Mean TPOT:         15.2 ms
+  Median TPOT:       14.8 ms
+  P99 TPOT:          28.5 ms
+  
+  Mean E2E:          2134.5 ms
+  Median E2E:        1895.3 ms
+  P99 E2E:           4250.8 ms
+
+Concurrency:
+  Average:           47.2
+  Max:               50
+============================================================
+```
+
+## Common Benchmark Scenarios
+
+### 1. Maximum Throughput
+
+Send all requests simultaneously to measure peak throughput:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-name random \
+  --num-prompts 1000 \
+  --random-input 128 \
+  --random-output 128 \
+  --request-rate inf
+```
+
+### 2. Sustained Load Test
+
+Test steady-state performance with fixed request rate:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-name sharegpt \
+  --num-prompts 500 \
+  --request-rate 5 \
+  --max-concurrency 20
+```
+
+### 3. Latency Benchmark
+
+Measure single-request latency with minimal concurrency:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-name random \
+  --num-prompts 100 \
+  --request-rate 1 \
+  --random-input 512 \
+  --random-output 256
+```
+
+### 4. Long Context Benchmark
+
+Test performance with long input contexts:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-name random \
+  --num-prompts 100 \
+  --random-input 8192 \
+  --random-output 512 \
+  --request-rate 2
+```
+
+### 5. Prefix Caching Effectiveness
+
+Benchmark with shared prefixes to measure cache hit rates:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-name random \
+  --num-prompts 1000 \
+  --random-input 2048 \
+  --random-output 128 \
+  --random-range-ratio 0.1
+```
+
+Low `random-range-ratio` creates similar prompts, increasing cache hits.
+
+### 6. Multi-Turn Conversation
+
+Benchmark chat completions with multiple turns:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang-oai-chat \
+  --dataset-name sharegpt \
+  --num-prompts 200 \
+  --multi-turn \
+  --num-turns 3
+```
+
+### 7. LoRA Adapter Performance
+
+Test LoRA adapter switching overhead:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-name random \
+  --num-prompts 500 \
+  --lora-name adapter1 adapter2 adapter3 \
+  --lora-request-distribution uniform
+```
+
+### 8. Trace Replay
+
+Replay production traffic patterns with Mooncake dataset:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-name mooncake \
+  --dataset-path /path/to/mooncake.json \
+  --mooncake-slowdown-factor 1.0 \
+  --mooncake-num-rounds 1
+```
+
+## Profiling
+
+Enable PyTorch profiling during benchmarks:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-name random \
+  --num-prompts 100 \
+  --profile \
+  --profile-output-dir ./profiles \
+  --profile-num-steps 10
+```
+
+**Profile Options:**
+- `--profile`: Enable profiling
+- `--profile-output-dir`: Directory for profile traces
+- `--profile-num-steps`: Number of steps to profile
+- `--profile-by-stage`: Profile by processing stage
+- `--profile-stages`: Specific stages to profile
+- `--profile-activities`: Activities to track (e.g., `cpu`, `cuda`)
+
+## Disaggregated Mode
+
+For prefill-decode disaggregation, profile both workers:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-name random \
+  --num-prompts 100 \
+  --profile \
+  --pd-separated \
+  --profile-prefill-url http://prefill-worker:30000 \
+  --profile-decode-url http://decode-worker:30001
+```
+
+## Interpreting Results
+
+### Good Performance Indicators
+
+- **TTFT**: &lt;100ms for short contexts, &lt;500ms for long contexts
+- **TPOT**: 10-20ms for typical models
+- **ITL**: Low variance (std < mean)
+- **Throughput**: Scales with batch size and concurrency
+- **Cache hit rate**: >50% for production workloads with repeated patterns
+
+### Performance Issues
+
+**High TTFT:**
+- Large batch size (queue depth)
+- Long input contexts
+- Memory allocation delays
+
+**High TPOT:**
+- Low batch size (GPU underutilization)
+- Model size vs hardware mismatch
+- Memory bandwidth bottleneck
+
+**High ITL Variance:**
+- Scheduler preemption
+- Mixed request sizes
+- Cache eviction
+
+**Low Throughput:**
+- Too few concurrent requests
+- Small batch sizes
+- CPU bottleneck (tokenization)
+
+## Comparing Backends
+
+Benchmark multiple backends with the same workload:
+
+```bash
+for backend in sglang vllm lmdeploy; do
+  echo "\n=== Testing $backend ==="
+  python3 -m sglang.bench_serving \
+    --backend $backend \
+    --dataset-name sharegpt \
+    --num-prompts 500 \
+    --request-rate 10 \
+    --output-file results_${backend}.json
+done
+```
+
+## Custom Datasets
+
+Create a custom dataset file (JSON lines format):
+
+```json
+{"prompt": "What is machine learning?", "output_len": 150}
+{"prompt": "Explain neural networks.", "output_len": 200}
+{"prompt": "What is SGLang?", "output_len": 100}
+```
+
+Run benchmark:
+
+```bash
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --dataset-path custom_dataset.json \
+  --num-prompts 100
+```
+
+## Continuous Benchmarking
+
+For production monitoring, run periodic benchmarks:
+
+```bash
+#!/bin/bash
+while true; do
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  python3 -m sglang.bench_serving \
+    --backend sglang \
+    --dataset-name random \
+    --num-prompts 100 \
+    --output-file benchmark_${timestamp}.json
+  sleep 3600  # Run hourly
+done
+```
+
+## Best Practices
+
+1. **Warmup**: Always use `--warmup-requests` to exclude cold-start effects
+2. **Multiple runs**: Run benchmarks 3-5 times and average results
+3. **Representative workloads**: Use datasets matching your production traffic
+4. **Metrics collection**: Enable `--enable-metrics` on server during benchmarks
+5. **System isolation**: Run benchmarks on dedicated hardware when possible
+6. **Network latency**: Co-locate benchmark client and server to isolate serving performance
+7. **Monitor resources**: Watch GPU/CPU/memory utilization during benchmarks
+
+## Troubleshooting
+
+### Connection Errors
+
+```bash
+# Wait for server to be ready
+python3 -m sglang.bench_serving \
+  --backend sglang \
+  --host http://localhost:30000 \
+  --wait-for-ready
+```
+
+### Authentication
+
+Set API key:
+
+```bash
+export OPENAI_API_KEY=your_key_here
+# or
+export API_KEY=your_key_here
+
+python3 -m sglang.bench_serving ...
+```
+
+### High Error Rate
+
+- Reduce `--request-rate` or `--max-concurrency`
+- Increase server `--max-running-requests`
+- Check server logs for OOM errors
+
+## Next Steps
+
+- Set up [monitoring](/observability/monitoring) to track metrics during benchmarks
+- Review [available metrics](/observability/metrics) to analyze results
+- Enable [tracing](/observability/tracing) for detailed request analysis

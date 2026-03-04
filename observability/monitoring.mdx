@@ -1,0 +1,215 @@
+---
+title: Monitoring SGLang
+description: Set up and configure monitoring for SGLang servers
+---
+
+## Overview
+
+SGLang provides comprehensive monitoring capabilities through Prometheus metrics and Grafana dashboards. This allows you to track performance, resource usage, and request patterns in real-time.
+
+## Quick Start
+
+### Enable Metrics
+
+To enable metrics collection, start your SGLang server with the `--enable-metrics` flag:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --port 30000 \
+  --enable-metrics
+```
+
+The metrics endpoint will be available at `http://localhost:30000/metrics`.
+
+### Verify Metrics
+
+You can verify that metrics are being collected by querying the metrics endpoint:
+
+```bash
+curl http://localhost:30000/metrics
+```
+
+## Docker-based Monitoring Stack
+
+SGLang includes a pre-configured monitoring stack with Prometheus and Grafana in the `examples/monitoring` directory.
+
+### Prerequisites
+
+- Docker and Docker Compose installed
+- SGLang server running with metrics enabled
+
+### Setup Steps
+
+1. **Start your SGLang server with metrics enabled:**
+
+   ```bash
+   python -m sglang.launch_server \
+     --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+     --port 30000 \
+     --enable-metrics \
+     --host 0.0.0.0
+   ```
+
+2. **Navigate to the monitoring directory:**
+
+   ```bash
+   cd examples/monitoring
+   ```
+
+3. **Start the monitoring stack:**
+
+   ```bash
+   docker compose up -d
+   ```
+
+4. **Access the interfaces:**
+   - **Grafana**: [http://localhost:3000](http://localhost:3000)
+   - **Prometheus**: [http://localhost:9090](http://localhost:9090)
+
+5. **Log in to Grafana:**
+   - Default Username: `admin`
+   - Default Password: `admin`
+   - You will be prompted to change the password on first login
+
+6. **View the Dashboard:**
+   Navigate to `Dashboards` → `Browse` → `SGLang Monitoring` → `SGLang Dashboard`
+
+## Configuration Files
+
+The monitoring setup is defined by these files in `examples/monitoring`:
+
+- **`docker-compose.yaml`**: Defines Prometheus and Grafana services
+- **`prometheus.yaml`**: Prometheus configuration, including scrape targets
+- **`grafana/datasources/datasource.yaml`**: Configures Prometheus as a data source
+- **`grafana/dashboards/config/dashboard.yaml`**: Tells Grafana where to load dashboards
+- **`grafana/dashboards/json/sglang-dashboard.json`**: The Grafana dashboard definition
+
+### Customizing Prometheus Scrape Configuration
+
+If your SGLang server runs on a different host or port, update the `prometheus.yaml` file:
+
+```yaml
+scrape_configs:
+  - job_name: 'sglang'
+    static_configs:
+      - targets: ['host.docker.internal:30000']  # Update this
+```
+
+For SGLang running in Docker, use `host.docker.internal` (Docker Desktop) or your machine's network IP instead of `localhost`.
+
+## Troubleshooting
+
+### Port Conflicts
+
+If ports 3000 or 9090 are already in use:
+
+**Option 1: Change Grafana port with environment variable:**
+
+```yaml
+services:
+  grafana:
+    environment:
+      - GF_SERVER_HTTP_PORT=3090
+```
+
+**Option 2: Update port mapping:**
+
+```yaml
+services:
+  grafana:
+    ports:
+      - "3090:3000"  # Host:Container
+```
+
+### No Data on Dashboard
+
+1. **Generate traffic** to produce metrics:
+
+   ```bash
+   python3 -m sglang.bench_serving \
+     --backend sglang \
+     --dataset-name random \
+     --num-prompts 100 \
+     --random-input 128 \
+     --random-output 128
+   ```
+
+2. **Verify Prometheus is scraping** the SGLang endpoint:
+   - Go to Prometheus UI: [http://localhost:9090](http://localhost:9090)
+   - Check `Status` → `Targets`
+   - Ensure the SGLang endpoint shows as "UP"
+
+3. **Check label matching**:
+   - Verify `model_name` and `instance` labels in Prometheus match dashboard variables
+   - You may need to adjust Grafana dashboard variables
+
+### Connection Issues
+
+1. **Verify containers are running:**
+
+   ```bash
+   docker ps
+   ```
+
+2. **Check Prometheus data source in Grafana:**
+   - Go to `Connections` → `Data sources` → `Prometheus`
+   - URL should be `http://prometheus:9090`
+
+3. **Test metrics endpoint accessibility:**
+
+   From inside the Prometheus container:
+
+   ```bash
+   docker exec -it prometheus curl http://host.docker.internal:30000/metrics
+   ```
+
+## Advanced Configuration
+
+### Extra Metric Labels
+
+Add custom labels to all metrics using the `--extra-metric-labels` flag:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Meta-Llama-3.1-8B-Instruct \
+  --enable-metrics \
+  --extra-metric-labels '{"environment":"production","region":"us-west"}'
+```
+
+### Multiprocess Metrics
+
+For multi-GPU or distributed setups, SGLang automatically handles multiprocess metrics collection. Each process exports metrics with appropriate labels:
+
+- `tp_rank`: Tensor parallel rank
+- `pp_rank`: Pipeline parallel rank
+- `dp_rank`: Data parallel rank (if applicable)
+- `moe_ep_rank`: MoE expert parallel rank
+
+### CPU Monitoring
+
+SGLang includes CPU usage monitoring via the `sglang:process_cpu_seconds_total` metric, which tracks total CPU time (user + system) consumed by each process component.
+
+## Grafana Dashboard
+
+The pre-configured dashboard provides visualization for:
+
+- **Request Metrics**: Throughput, latency distributions (TTFT, TPOT, E2E)
+- **Token Metrics**: Prompt tokens, generation tokens, cache hit rates
+- **Resource Utilization**: Token usage, queue sizes, running requests
+- **Performance**: Generation throughput, inter-token latency
+- **Speculative Decoding**: Acceptance rates and lengths (if enabled)
+- **PD Disaggregation**: KV transfer speeds, queue depths (if using prefill-decode separation)
+
+The dashboard JSON can be found at:
+```
+examples/monitoring/grafana/dashboards/json/sglang-dashboard.json
+```
+
+You can customize this dashboard or create your own based on the available [metrics](/observability/metrics).
+
+## Next Steps
+
+- Learn about available [Prometheus metrics](/observability/metrics)
+- Set up [request tracing](/observability/tracing) with OpenTelemetry
+- Run [benchmarks](/observability/benchmarking) to test performance

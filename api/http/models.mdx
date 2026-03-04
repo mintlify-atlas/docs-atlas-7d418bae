@@ -1,0 +1,287 @@
+---
+title: Models
+description: List and retrieve model information
+---
+
+# Models
+
+The models endpoint provides information about available models. This endpoint is compatible with OpenAI's `/v1/models` API.
+
+## List Models
+
+Retrieve a list of all available models.
+
+### Request
+
+```bash
+curl http://localhost:30000/v1/models
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY"
+)
+
+models = client.models.list()
+for model in models.data:
+    print(f"Model ID: {model.id}")
+    print(f"Created: {model.created}")
+    print(f"Owned by: {model.owned_by}")
+    print()
+```
+
+### Response
+
+<ResponseField name="object" type="string">
+  Always `"list"`.
+</ResponseField>
+
+<ResponseField name="data" type="array">
+  Array of model objects.
+
+  <ResponseField name="id" type="string">
+    Model identifier (e.g., `"meta-llama/Llama-3.1-8B-Instruct"`).
+  </ResponseField>
+
+  <ResponseField name="object" type="string">
+    Always `"model"`.
+  </ResponseField>
+
+  <ResponseField name="created" type="integer">
+    Unix timestamp when the model was added.
+  </ResponseField>
+
+  <ResponseField name="owned_by" type="string">
+    Organization that owns the model (always `"sglang"`).
+  </ResponseField>
+
+  <ResponseField name="root" type="string | null">
+    Root model identifier.
+  </ResponseField>
+
+  <ResponseField name="parent" type="string | null">
+    Parent model identifier.
+  </ResponseField>
+
+  <ResponseField name="max_model_len" type="integer | null">
+    Maximum context length supported by the model.
+  </ResponseField>
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "meta-llama/Llama-3.1-8B-Instruct",
+      "object": "model",
+      "created": 1234567890,
+      "owned_by": "sglang",
+      "root": null,
+      "parent": null,
+      "max_model_len": 131072
+    }
+  ]
+}
+```
+
+## Retrieve Model
+
+Get information about a specific model.
+
+### Request
+
+```bash
+curl http://localhost:30000/v1/models/meta-llama/Llama-3.1-8B-Instruct
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:30000/v1",
+    api_key="EMPTY"
+)
+
+model = client.models.retrieve("meta-llama/Llama-3.1-8B-Instruct")
+print(f"Model: {model.id}")
+print(f"Max length: {model.max_model_len}")
+```
+
+### Response
+
+<ResponseField name="id" type="string">
+  Model identifier.
+</ResponseField>
+
+<ResponseField name="object" type="string">
+  Always `"model"`.
+</ResponseField>
+
+<ResponseField name="created" type="integer">
+  Unix timestamp when the model was added.
+</ResponseField>
+
+<ResponseField name="owned_by" type="string">
+  Organization that owns the model.
+</ResponseField>
+
+<ResponseField name="root" type="string | null">
+  Root model identifier.
+</ResponseField>
+
+<ResponseField name="parent" type="string | null">
+  Parent model identifier.
+</ResponseField>
+
+<ResponseField name="max_model_len" type="integer | null">
+  Maximum context length.
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "id": "meta-llama/Llama-3.1-8B-Instruct",
+  "object": "model",
+  "created": 1234567890,
+  "owned_by": "sglang",
+  "root": null,
+  "parent": null,
+  "max_model_len": 131072
+}
+```
+
+## LoRA Adapters
+
+When using LoRA adapters, you can reference them using the syntax `base-model:adapter-name`:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:30000/v1", api_key="EMPTY")
+
+# Using a LoRA adapter
+response = client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct:my-lora-adapter",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+## Multi-Model Serving
+
+SGLang supports serving multiple models simultaneously using different methods:
+
+### Data Parallelism (DP)
+
+Multiple replicas of the same model for higher throughput:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --dp-size 4
+```
+
+### Multiple LoRA Adapters
+
+Serve a base model with multiple LoRA adapters:
+
+```bash
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.1-8B-Instruct \
+  --lora-paths adapter1,adapter2,adapter3
+```
+
+## Examples
+
+### List All Models
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:30000/v1", api_key="EMPTY")
+
+models = client.models.list()
+print(f"Available models: {len(models.data)}")
+
+for model in models.data:
+    max_len = model.max_model_len or "Unknown"
+    print(f"- {model.id} (max context: {max_len})")
+```
+
+### Check Model Capabilities
+
+```python
+model = client.models.retrieve("meta-llama/Llama-3.1-8B-Instruct")
+
+# Check if model supports long context
+if model.max_model_len and model.max_model_len >= 100000:
+    print(f"{model.id} supports long context ({model.max_model_len} tokens)")
+else:
+    print(f"{model.id} has limited context ({model.max_model_len} tokens)")
+```
+
+### Verify Model Before Request
+
+```python
+try:
+    model = client.models.retrieve("meta-llama/Llama-3.1-8B-Instruct")
+    print(f"Model {model.id} is available")
+    
+    # Now make a request
+    response = client.chat.completions.create(
+        model=model.id,
+        messages=[{"role": "user", "content": "Hello!"}]
+    )
+except Exception as e:
+    print(f"Model not available: {e}")
+```
+
+## Error Handling
+
+### Model Not Found
+
+If you request a model that doesn't exist:
+
+```python
+try:
+    model = client.models.retrieve("nonexistent-model")
+except Exception as e:
+    print(f"Error: {e}")
+    # Error: Model 'nonexistent-model' not found
+```
+
+## Supported Models
+
+SGLang supports a wide range of models including:
+
+### Language Models
+- **Llama**: Llama 2, Llama 3, Llama 3.1, Llama 3.2
+- **Qwen**: Qwen, Qwen2, Qwen2.5
+- **Mistral**: Mistral 7B, Mixtral 8x7B, Mixtral 8x22B
+- **DeepSeek**: DeepSeek V2, DeepSeek V3
+- **Gemma**: Gemma 2B, Gemma 7B, Gemma 2
+
+### Vision-Language Models
+- **Llama 3.2 Vision**: 11B, 90B
+- **Qwen2-VL**: 2B, 7B, 72B
+- **InternVL**: 2, 2.5
+- **LLaVA**: 1.5, 1.6, OneVision
+
+### Other Models
+- **Embedding Models**: BGE, E5, etc.
+- **Reasoning Models**: GPT-OSS models with reasoning support
+
+For a complete list of supported models, see the [supported models documentation](/models/supported-models).
+
+## See Also
+
+- [Chat Completions](/api/http/chat-completions) - Generate chat responses
+- [Completions](/api/http/completions) - Generate text completions
+- [Embeddings](/api/http/embeddings) - Generate embeddings
+- [Server Args](/api/server-args) - Server configuration options

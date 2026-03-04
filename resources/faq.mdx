@@ -1,0 +1,132 @@
+---
+title: FAQ
+description: Frequently asked questions about SGLang
+---
+
+## Frequently Asked Questions
+
+### The results are not deterministic, even with a temperature of 0
+
+You may notice that when you send the same request twice, the results from the engine will be slightly different, even when the temperature is set to 0.
+
+From our initial investigation, this indeterminism arises from two factors: dynamic batching and prefix caching. Roughly speaking, dynamic batching accounts for about 95% of the indeterminism, while prefix caching accounts for the remaining portion. The server runs dynamic batching under the hood. Different batch sizes can cause PyTorch/CuBLAS to dispatch to different CUDA kernels, which can lead to slight numerical differences. This difference accumulates across many layers, resulting in nondeterministic output when the batch size changes. Similarly, when prefix caching is enabled, it can also dispatch to different kernels. Even when the computations are mathematically equivalent, small numerical differences from different kernel implementations lead to the final nondeterministic outputs.
+
+To achieve more deterministic outputs in the current code, you can add `--disable-radix-cache` and send only one request at a time. The results will be mostly deterministic under this setting.
+
+**Update**: Recently, we also introduced a deterministic mode, you can enable it with `--enable-deterministic-inference`.
+Please find more details in this blog post: https://lmsys.org/blog/2025-09-22-sglang-deterministic/
+
+### What models are supported?
+
+SGLang supports a wide range of models including:
+- Generative models (LLaMA, Mistral, Qwen, DeepSeek, etc.)
+- Multimodal language models (LLaVA, Qwen-VL, etc.)
+- Embedding and reranking models
+- Reward models
+- Diffusion models
+
+Refer to the supported models documentation for the complete list.
+
+### How do I optimize performance?
+
+Performance can be optimized through:
+- Adjusting batch sizes and memory parameters
+- Using appropriate quantization methods
+- Configuring tensor/pipeline parallelism
+- Tuning chunked prefill sizes
+- Enabling CUDA graphs
+- Using prefix caching
+
+See the [Hyperparameter Tuning](/advanced-features/hyperparameter-tuning) guide for detailed recommendations.
+
+### Can I use SGLang with multiple GPUs?
+
+Yes, SGLang supports:
+- **Tensor Parallelism (TP)**: Split model across multiple GPUs
+- **Pipeline Parallelism (PP)**: Split model layers across GPUs
+- **Data Parallelism (DP)**: Replicate model for higher throughput
+- **Expert Parallelism**: For MoE models
+
+Use the `--tp`, `--dp`, and `--pp` arguments to configure parallelism.
+
+### How do I integrate SGLang with my application?
+
+SGLang provides multiple integration options:
+- **OpenAI-compatible API**: Drop-in replacement for OpenAI clients
+- **Native Python API**: Direct integration in Python applications
+- **Ollama API**: Compatible with Ollama clients
+- **gRPC**: For high-performance scenarios
+
+See the API documentation for examples.
+
+### Does SGLang support function calling/tool use?
+
+Yes, SGLang supports function calling and tool use for compatible models. Use the `tools` parameter in your requests to define available functions. The strictness level can be controlled via the `SGLANG_TOOL_STRICT_LEVEL` environment variable.
+
+### How do I handle vision/multimodal inputs?
+
+For multimodal models, you can include images in your requests:
+
+```python
+response = client.chat.completions.create(
+    model="llava-v1.6-vicuna-7b",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "https://..."}},
+                {"type": "text", "text": "What's in this image?"}
+            ]
+        }
+    ]
+)
+```
+
+### What quantization methods are supported?
+
+SGLang supports multiple quantization formats:
+- FP8 (W8A8, per-channel and per-token)
+- INT4 (AWQ, GPTQ)
+- INT8
+- FP4 (NVFP4)
+- Block-wise quantization
+
+See the [Quantization](/advanced-features/quantization) guide for details.
+
+### How do I monitor SGLang in production?
+
+SGLang provides comprehensive observability features:
+- Prometheus metrics endpoint
+- Request logging and tracing
+- OpenTelemetry integration
+- Health check endpoints
+- Performance profiling tools
+
+See the [Observability](/advanced-features/observability) guide.
+
+### Can I use SGLang on platforms other than NVIDIA GPUs?
+
+Yes, SGLang supports:
+- **AMD GPUs** (ROCm)
+- **Ascend NPUs** (Huawei)
+- **Intel GPUs** (XPU)
+- **CPU** (limited functionality)
+- **TPU** (experimental)
+
+Refer to the platform-specific documentation for setup instructions.
+
+### How do I contribute to SGLang?
+
+Contributions are welcome! See the [Contribution Guide](/developer-guide/contribution-guide) for:
+- Setting up the development environment
+- Code style guidelines
+- Testing requirements
+- Pull request process
+
+### Where can I get help?
+
+- **GitHub Issues**: Report bugs and request features
+- **Slack**: Join the community at https://slack.sglang.io/
+- **Weekly Meetings**: https://meet.sglang.io
+- **Documentation**: Search this documentation site
+- **Blog**: Check https://lmsys.org/blog/ for updates

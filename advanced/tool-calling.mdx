@@ -1,0 +1,452 @@
+---
+title: Tool Calling
+description: Enable function calling with structured tool definitions
+---
+
+SGLang provides comprehensive support for function calling (tool calling), enabling models to interact with external tools and APIs. This follows the [OpenAI function calling specification](https://platform.openai.com/docs/guides/function-calling).
+
+## Supported Parsers
+
+| Parser | Supported Models | Notes |
+|--------|------------------|-------|
+| `deepseekv3` | DeepSeek-V3 | Recommend `--chat-template ./examples/chat_template/tool_chat_template_deepseekv3.jinja` |
+| `deepseekv31` | DeepSeek-V3.1, DeepSeek-V3.2-Exp | Recommend custom chat template |
+| `deepseekv32` | DeepSeek-V3.2 | Official V3.2 release |
+| `glm` | GLM series (e.g., `zai-org/GLM-4.6`) | ChatGLM models |
+| `gpt-oss` | GPT-OSS (120B, 20B variants) | Filters analysis channel events |
+| `kimi_k2` | `moonshotai/Kimi-K2-Instruct` | Moonshot AI model |
+| `llama3` | Llama 3.1/3.2/3.3 | Meta's Llama family |
+| `llama4` | Llama 4 | Latest Llama models |
+| `mistral` | Mistral models | Mistral AI models |
+| `pythonic` | Llama-3.2/3.3/4 | Outputs function calls as Python code |
+| `qwen` | Qwen series (except Qwen3-Coder) | Alibaba Qwen models |
+| `qwen3_coder` | Qwen3-Coder | Specialized coder variant |
+| `step3` | Step-3 | Step models |
+
+## Quick Start
+
+### Launch Server
+
+```bash
+python -m sglang.launch_server \
+    --model-path Qwen/Qwen2.5-7B-Instruct \
+    --tool-call-parser qwen25
+```
+
+<Note>
+The `--tool-call-parser` argument specifies which parser to use for interpreting function calls in the model's output.
+</Note>
+
+### Define Tools
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "The city to find the weather for, e.g. 'San Francisco'",
+                    },
+                    "state": {
+                        "type": "string",
+                        "description": "Two-letter state abbreviation, e.g. 'CA' for California",
+                    },
+                    "unit": {
+                        "type": "string",
+                        "description": "Temperature unit",
+                        "enum": ["celsius", "fahrenheit"],
+                    },
+                },
+                "required": ["city", "state", "unit"],
+            },
+        },
+    }
+]
+```
+
+### Make Requests
+
+#### Non-Streaming
+
+```python
+import openai
+
+client = openai.Client(base_url="http://localhost:30000/v1", api_key="None")
+
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today?",
+        }
+    ],
+    temperature=0,
+    tools=tools,
+)
+
+print("Content:", response.choices[0].message.content)
+print("Tool calls:", response.choices[0].message.tool_calls)
+
+# Access tool call details
+if response.choices[0].message.tool_calls:
+    tool_call = response.choices[0].message.tool_calls[0]
+    print("Function:", tool_call.function.name)
+    print("Arguments:", tool_call.function.arguments)
+```
+
+#### Streaming
+
+```python
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today?",
+        }
+    ],
+    temperature=0,
+    stream=True,
+    tools=tools,
+)
+
+text = ""
+tool_calls = []
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        text += chunk.choices[0].delta.content
+    if chunk.choices[0].delta.tool_calls:
+        tool_calls.append(chunk.choices[0].delta.tool_calls[0])
+
+print("Text:", text)
+print("Tool calls:", tool_calls)
+
+# Reconstruct function call
+function_name = next(
+    (tc.function.name for tc in tool_calls if tc.function.name),
+    None
+)
+arguments = "".join(
+    tc.function.arguments for tc in tool_calls if tc.function.arguments
+)
+
+print(f"Function: {function_name}")
+print(f"Arguments: {arguments}")
+```
+
+## Multi-Tool Support
+
+Define multiple tools for the model to choose from:
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_weather",
+            "description": "Get the current weather",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string"},
+                    "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+                },
+                "required": ["city"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_stock_price",
+            "description": "Get current stock price",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string", "description": "Stock ticker symbol"},
+                },
+                "required": ["symbol"],
+            },
+        },
+    },
+]
+
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": "What's the weather in SF and the AAPL stock price?",
+        }
+    ],
+    tools=tools,
+)
+```
+
+## Tool Choice Control
+
+Control when and how the model calls tools:
+
+```python
+# Auto: Model decides whether to call tools
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[...],
+    tools=tools,
+    tool_choice="auto",  # Default
+)
+
+# None: Model cannot call tools
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[...],
+    tools=tools,
+    tool_choice="none",
+)
+
+# Required: Model must call a tool
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[...],
+    tools=tools,
+    tool_choice="required",
+)
+
+# Specific: Force a specific tool
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[...],
+    tools=tools,
+    tool_choice={
+        "type": "function",
+        "function": {"name": "get_current_weather"},
+    },
+)
+```
+
+## Multi-Turn Conversations
+
+Implement agentic workflows with tool execution:
+
+```python
+def get_current_weather(city: str, state: str, unit: str) -> str:
+    # Implement actual weather API call
+    return f"The weather in {city}, {state} is 72°{unit[0].upper()}"
+
+messages = [
+    {"role": "user", "content": "What's the weather in Boston, MA?"}
+]
+
+# First turn: Model calls tool
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=messages,
+    tools=tools,
+)
+
+assistant_message = response.choices[0].message
+messages.append(assistant_message.model_dump())
+
+# Execute tool
+if assistant_message.tool_calls:
+    for tool_call in assistant_message.tool_calls:
+        function_name = tool_call.function.name
+        arguments = eval(tool_call.function.arguments)  # Parse JSON
+        
+        # Call the actual function
+        result = get_current_weather(**arguments)
+        
+        # Add tool result to messages
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call.id,
+            "content": result,
+        })
+
+# Second turn: Model generates final response
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=messages,
+    tools=tools,
+)
+
+print(response.choices[0].message.content)
+# "The weather in Boston, MA is currently 72°F."
+```
+
+## Parallel Tool Calls
+
+Some models support calling multiple tools in one turn:
+
+```python
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[
+        {
+            "role": "user",
+            "content": "Get weather in Boston and stock price for AAPL",
+        }
+    ],
+    tools=tools,
+    parallel_tool_calls=True,  # Enable parallel calls
+)
+
+# Process multiple tool calls
+for tool_call in response.choices[0].message.tool_calls:
+    print(f"Tool: {tool_call.function.name}")
+    print(f"Args: {tool_call.function.arguments}")
+```
+
+## Pythonic Tool Calling
+
+Some models can output function calls as executable Python code:
+
+```bash
+python -m sglang.launch_server \
+    --model-path meta-llama/Llama-3.2-3B-Instruct \
+    --tool-call-parser pythonic
+```
+
+The model generates:
+
+```python
+get_current_weather(city="Boston", state="MA", unit="fahrenheit")
+```
+
+Instead of JSON format.
+
+## Model-Specific Notes
+
+<AccordionGroup>
+  <Accordion title="DeepSeek Models">
+    DeepSeek-V3 family supports thinking before tool calls:
+    
+    ```python
+    response = client.chat.completions.create(
+        model="deepseek-ai/DeepSeek-V3.1",
+        messages=[...],
+        tools=tools,
+        extra_body={"thinking": True},  # Enable reasoning
+    )
+    ```
+  </Accordion>
+  
+  <Accordion title="GPT-OSS">
+    GPT-OSS uses analysis channels. The parser filters these out, but content may be empty if all output is in analysis channel. Complete the tool round by returning tool results to get final content.
+  </Accordion>
+  
+  <Accordion title="Kimi K2">
+    For Kimi K2 with thinking, use both parsers:
+    
+    ```bash
+    python -m sglang.launch_server \
+        --model-path moonshotai/Kimi-K2-Thinking \
+        --tool-call-parser kimi_k2 \
+        --reasoning-parser kimi_k2
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Implementation Details
+
+Tool calling is implemented through the `FunctionCallParser` system:
+
+```python
+# From python/sglang/srt/function_call/function_call_parser.py:39
+class FunctionCallParser:
+    ToolCallParserEnum = {
+        "deepseekv3": DeepSeekV3Detector,
+        "llama3": Llama32Detector,
+        "qwen": Qwen25Detector,
+        # ...
+    }
+    
+    def parse_stream_chunk(self, chunk_text):
+        """Parse streaming chunks for tool calls"""
+        return self.detector.parse_streaming_increment(chunk_text, self.tools)
+    
+    def parse_non_stream(self, full_text):
+        """Parse complete text for tool calls"""
+        return self.detector.detect_and_parse(full_text, self.tools)
+```
+
+Source: `python/sglang/srt/function_call/function_call_parser.py:39`
+
+Each detector implements:
+- **Pattern detection**: Identify tool call syntax in output
+- **Argument extraction**: Parse JSON/Python arguments
+- **Streaming support**: Handle incremental parsing
+- **Validation**: Ensure arguments match schema
+
+## Combining with Structured Outputs
+
+You can combine tool calling with structured outputs for precise control:
+
+```python
+response = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[...],
+    tools=tools,
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "weather_response",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "tool_call": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                },
+            },
+        },
+    },
+)
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="1. Provide Clear Descriptions">
+    Write descriptive tool names and clear parameter descriptions. This helps the model understand when and how to use each tool.
+  </Accordion>
+  
+  <Accordion title="2. Use Required Fields">
+    Mark essential parameters as `required` in the schema. This ensures the model provides all necessary information.
+  </Accordion>
+  
+  <Accordion title="3. Handle Errors Gracefully">
+    Always validate tool call arguments before execution. Handle parsing errors and missing parameters appropriately.
+  </Accordion>
+  
+  <Accordion title="4. Implement Timeouts">
+    Set reasonable timeouts for tool execution to prevent hanging on slow APIs.
+  </Accordion>
+  
+  <Accordion title="5. Use Enums for Constrained Values">
+    Define `enum` fields for parameters with fixed options (e.g., units, categories).
+  </Accordion>
+</AccordionGroup>
+
+## Performance Considerations
+
+- **Parser overhead**: Minimal (&lt;1ms per request)
+- **Streaming latency**: Tool calls appear incrementally in stream
+- **Multi-tool calls**: Some parsers support multiple calls per turn
+- **Validation**: Schema validation adds negligible overhead
+
+## Limitations
+
+<Warning>
+- Parser support varies by model architecture
+- Some models may hallucinate tool calls not in the provided list
+- Complex nested schemas may confuse some models
+- Streaming with parallel tool calls may have delayed final chunks
+</Warning>

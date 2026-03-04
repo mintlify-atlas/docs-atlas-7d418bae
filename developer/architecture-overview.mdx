@@ -1,0 +1,507 @@
+---
+title: Architecture Overview
+description: Understanding SGLang's architecture and design
+---
+
+# Architecture Overview
+
+This guide provides an overview of SGLang's architecture, components, and design principles.
+
+## High-Level Architecture
+
+SGLang consists of three main layers:
+
+```
+┌─────────────────────────────────────────────┐
+│         Frontend Language (SGLang)          │
+│    - Structured generation primitives       │
+│    - Control flow                           │
+│    - Constrained decoding                   │
+└─────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────┐
+│          HTTP/gRPC API Server               │
+│    - OpenAI-compatible endpoints            │
+│    - Request routing                        │
+│    - Authentication                         │
+└─────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────┐
+│         Runtime (SRT - SGLang Runtime)      │
+│    - Efficient scheduling                   │
+│    - Memory management                      │
+│    - Kernel optimizations                   │
+└─────────────────────────────────────────────┘
+```
+
+## Core Components
+
+### 1. Engine
+
+The `Engine` is the main entry point for inference. It coordinates between the tokenizer manager, scheduler, and detokenizer.
+
+**Location**: `python/sglang/srt/entrypoints/engine.py`
+
+**Key Responsibilities**:
+- Initialize model and workers
+- Manage request lifecycle
+- Coordinate inter-process communication
+
+**Process Architecture**:
+```
+Main Process:
+├── HTTP Server
+├── Engine
+└── TokenizerManager
+
+Subprocess 1: Scheduler
+├── Model weights
+├── KV cache management
+└── Batch scheduling
+
+Subprocess 2: DetokenizerManager
+└── Token-to-text conversion
+```
+
+### 2. Scheduler
+
+The scheduler manages batching, memory allocation, and request execution.
+
+**Location**: `python/sglang/srt/managers/scheduler.py`
+
+**Key Features**:
+- **Dynamic batching**: Combines requests for efficient GPU utilization
+- **Continuous batching**: Processes requests as they arrive
+- **Prefix caching (RadixAttention)**: Reuses KV cache for common prefixes
+- **Chunked prefill**: Breaks large prefills into smaller chunks
+
+**Request Flow**:
+```
+Incoming Request
+    ↓
+Tokenization (TokenizerManager)
+    ↓
+Scheduling (Scheduler)
+    ├→ Wait queue (if resources unavailable)
+    └→ Running batch
+        ↓
+    Model forward pass
+        ↓
+    Token sampling
+        ↓
+    Detokenization (DetokenizerManager)
+        ↓
+    Response to client
+```
+
+### 3. Memory Management
+
+**Location**: `python/sglang/srt/mem_cache/`
+
+**Components**:
+- **Token-to-KV pool**: Maps tokens to KV cache locations
+- **Memory pool**: Pre-allocated GPU memory for KV cache
+- **Radix tree**: Efficient prefix matching and reuse
+
+**Memory Layout**:
+```
+GPU Memory:
+├── Model weights (static)
+├── KV cache pool (dynamic)
+│   ├── Request 1 KV cache
+│   ├── Request 2 KV cache
+│   └── ...
+├── Workspace buffers
+└── Activation memory
+```
+
+### 4. Model Runner
+
+Executes the actual model forward pass.
+
+**Location**: `python/sglang/srt/model_executor/model_runner.py`
+
+**Key Responsibilities**:
+- Load model weights
+- Execute forward pass (prefill and decode)
+- Apply sampling
+- Manage CUDA graphs
+
+**Forward Pass Modes**:
+- **Prefill**: Process input tokens (compute KV cache)
+- **Decode**: Generate one token at a time (use cached KV)
+- **Extend**: Hybrid mode for mid-sequence insertions
+
+### 5. Attention Backend
+
+Optimized attention implementations.
+
+**Location**: `python/sglang/srt/layers/attention/`
+
+**Backends**:
+- **FlashInfer**: Default, highly optimized
+- **FlashAttention**: Alternative backend
+- **Triton**: Custom Triton kernels
+
+**Attention Features**:
+- Grouped-query attention (GQA)
+- Multi-query attention (MQA)
+- Sliding window attention
+- Sparse attention patterns
+
+## Advanced Features
+
+### RadixAttention (Prefix Caching)
+
+Automatically detects and reuses common prompt prefixes.
+
+**Example**:
+```python
+# First request
+"Translate to French: Hello" → Generates and caches KV
+
+# Second request (shares prefix)
+"Translate to French: Goodbye" → Reuses cached KV for "Translate to French:"
+```
+
+**Data Structure**:
+```
+Radix Tree:
+    root
+    └── "Translate to French:"
+        ├── "Hello" → KV cache location A
+        └── "Goodbye" → KV cache location B
+```
+
+### Chunked Prefill
+
+Breaks long prompts into chunks to maintain low latency.
+
+**Without chunking**:
+```
+Long prompt (10000 tokens) → Single prefill (blocks other requests)
+```
+
+**With chunking**:
+```
+Long prompt → Chunk 1 (512 tokens) → Decode batch
+           → Chunk 2 (512 tokens) → Decode batch
+           → Chunk 3 (512 tokens) → Decode batch
+           → ...
+```
+
+### Multi-Model Serving
+
+**Data Parallelism (DP)**:
+```
+┌─────────┐  ┌─────────┐  ┌─────────┐
+│ Model 1 │  │ Model 2 │  │ Model 3 │  (Same model, different GPUs)
+└─────────┘  └─────────┘  └─────────┘
+     ↑            ↑            ↑
+     └────────────┴────────────┘
+            Load balancer
+```
+
+**Tensor Parallelism (TP)**:
+```
+Model layers split across GPUs:
+GPU 0: [Embedding, Layer 0, Layer 1, ...]
+GPU 1: [Embedding, Layer 0, Layer 1, ...]  (Weights sharded)
+```
+
+**Pipeline Parallelism (PP)**:
+```
+GPU 0: [Embedding, Layers 0-7]
+GPU 1: [Layers 8-15]
+GPU 2: [Layers 16-23, LM head]
+```
+
+### Expert Parallelism (EP)
+
+For Mixture-of-Experts (MoE) models:
+
+```
+Experts distributed across GPUs:
+GPU 0: [Expert 0, Expert 4, Expert 8, ...]
+GPU 1: [Expert 1, Expert 5, Expert 9, ...]
+GPU 2: [Expert 2, Expert 6, Expert 10, ...]
+GPU 3: [Expert 3, Expert 7, Expert 11, ...]
+```
+
+### Disaggregated Serving
+
+**Prefill-Decode (PD) Disaggregation**:
+```
+┌───────────────┐         ┌───────────────┐
+│ Prefill Pool  │  ──KV──→ │  Decode Pool  │
+│  (Compute)    │         │   (Memory)    │
+└───────────────┘         └───────────────┘
+```
+
+**Benefits**:
+- Independent scaling of prefill and decode
+- Better resource utilization
+- Lower latency for decode-heavy workloads
+
+## Communication & Synchronization
+
+### Inter-Process Communication (IPC)
+
+SGLang uses ZMQ for communication between processes:
+
+```
+TokenizerManager  ←──ZMQ──→  Scheduler
+                              ↓ ZMQ
+                      DetokenizerManager
+```
+
+**Message Types**:
+- `GenerateReqInput`: New request
+- `TokenizedResult`: Tokenized input
+- `BatchDecodeOutput`: Decoded tokens
+- `AbortReq`: Cancel request
+
+### Distributed Communication
+
+For multi-GPU setups, SGLang uses:
+- **NCCL**: GPU-to-GPU communication
+- **PyTorch distributed**: Process groups
+- **RDMA**: Low-latency networking (optional)
+
+## Request Lifecycle
+
+### 1. Request Arrival
+
+```python
+# HTTP request
+POST /v1/chat/completions
+{
+  "model": "meta-llama/Llama-3.1-8B-Instruct",
+  "messages": [{"role": "user", "content": "Hello"}]
+}
+```
+
+### 2. Validation & Tokenization
+
+```python
+# In TokenizerManager
+tokens = tokenizer.encode("Hello")  # [128000, 9906]
+```
+
+### 3. Scheduling
+
+```python
+# In Scheduler
+request = ScheduleBatch.Req(
+    rid=request_id,
+    input_ids=tokens,
+    sampling_params=sampling_params,
+)
+self.waiting_queue.append(request)
+```
+
+### 4. Batching & Execution
+
+```python
+# Scheduler creates batch
+batch = ScheduleBatch(
+    reqs=[req1, req2, req3],  # Batched requests
+    input_ids=padded_input_ids,
+    positions=positions,
+)
+
+# ModelRunner executes
+logits = model.forward(batch.input_ids, batch.positions, metadata)
+tokens = sample(logits, sampling_params)
+```
+
+### 5. Detokenization & Response
+
+```python
+# DetokenizerManager
+text = tokenizer.decode(tokens)
+
+# HTTP response
+{
+  "choices": [{
+    "message": {"role": "assistant", "content": text}
+  }]
+}
+```
+
+## Performance Optimizations
+
+### CUDA Graphs
+
+Capture and replay CUDA operations for reduced overhead.
+
+**Without CUDA graphs**:
+```
+For each decode step:
+  - Launch kernel 1
+  - Launch kernel 2
+  - Launch kernel 3
+  (CPU overhead per step)
+```
+
+**With CUDA graphs**:
+```
+Capture once:
+  - Kernel 1, 2, 3
+
+Replay for each decode step:
+  - Single graph launch (minimal CPU overhead)
+```
+
+### Continuous Batching
+
+Add/remove requests from batches dynamically:
+
+```
+Time 0: [Req1, Req2, Req3]
+Time 1: [Req1, Req2, Req3, Req4]  (Req4 arrives)
+Time 2: [Req1, Req3, Req4]        (Req2 finishes)
+Time 3: [Req3, Req4, Req5, Req6]  (Req1 finishes, Req5/6 arrive)
+```
+
+### Kernel Fusion
+
+Combine multiple operations into single kernels:
+
+```python
+# Unfused
+rms_norm(x)
+qkv_proj(x)
+rotary_emb(q, k)
+
+# Fused
+fused_rms_qkv_rope(x)  # All in one kernel
+```
+
+## Directory Structure
+
+```
+python/sglang/
+├── srt/                          # SGLang Runtime
+│   ├── entrypoints/             # HTTP/gRPC servers
+│   │   ├── http_server.py       # FastAPI server
+│   │   ├── engine.py            # Engine
+│   │   └── openai/              # OpenAI-compatible APIs
+│   ├── managers/                # Core managers
+│   │   ├── scheduler.py         # Request scheduler
+│   │   ├── tokenizer_manager.py # Tokenization
+│   │   └── detokenizer_manager.py
+│   ├── model_executor/          # Model execution
+│   │   └── model_runner.py      # Model forward pass
+│   ├── models/                  # Model implementations
+│   │   ├── llama.py
+│   │   ├── qwen2.py
+│   │   └── ...
+│   ├── layers/                  # Model layers
+│   │   ├── attention/           # Attention implementations
+│   │   ├── linear.py            # Linear layers
+│   │   └── layernorm.py         # Normalization
+│   ├── mem_cache/               # Memory management
+│   │   ├── radix_cache.py       # Radix tree cache
+│   │   └── memory_pool.py       # Memory allocator
+│   └── sampling/                # Sampling algorithms
+│       ├── penaltylib.py        # Penalties
+│       └── sampler.py           # Token sampling
+└── lang/                        # Frontend language
+    ├── ir.py                    # Intermediate representation
+    └── interpreter.py           # Language interpreter
+```
+
+## Design Principles
+
+### 1. Separation of Concerns
+
+- **Frontend**: High-level API and language constructs
+- **Runtime**: Efficient execution and resource management
+- **Kernels**: Low-level optimizations
+
+### 2. Modularity
+
+- Pluggable attention backends
+- Swappable memory allocators
+- Flexible scheduling policies
+
+### 3. Performance First
+
+- Zero-copy wherever possible
+- Minimize CPU-GPU synchronization
+- Aggressive kernel fusion
+- CUDA graphs for low latency
+
+### 4. Scalability
+
+- Horizontal scaling via data parallelism
+- Vertical scaling via tensor/pipeline parallelism
+- Disaggregated architectures for large deployments
+
+## Key Algorithms
+
+### Radix Tree Matching
+
+```python
+def match_prefix(prompt_tokens):
+    node = root
+    matched_tokens = []
+    
+    for token in prompt_tokens:
+        if token in node.children:
+            node = node.children[token]
+            matched_tokens.append(token)
+        else:
+            break
+    
+    return matched_tokens, node.kv_cache_indices
+```
+
+### Token Sampling
+
+```python
+def sample(logits, temperature, top_p, top_k):
+    # Apply temperature
+    logits = logits / temperature
+    
+    # Apply top-k
+    if top_k > 0:
+        indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+        logits[indices_to_remove] = -float('Inf')
+    
+    # Apply top-p (nucleus sampling)
+    if top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+        
+        # Remove tokens with cumulative prob > top_p
+        sorted_indices_to_remove = cumulative_probs > top_p
+        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+        sorted_indices_to_remove[..., 0] = 0
+        
+        indices_to_remove = sorted_indices_to_remove.scatter(
+            1, sorted_indices, sorted_indices_to_remove
+        )
+        logits[indices_to_remove] = -float('Inf')
+    
+    # Sample
+    probs = F.softmax(logits, dim=-1)
+    token = torch.multinomial(probs, num_samples=1)
+    return token
+```
+
+## Resources
+
+- [SGLang Paper](https://arxiv.org/abs/2312.07104)
+- [Source Code](https://github.com/sgl-project/sglang)
+- [Scheduler Implementation](https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/scheduler.py)
+- [Memory Management](https://github.com/sgl-project/sglang/tree/main/python/sglang/srt/mem_cache)
+
+## Next Steps
+
+- [Scheduler](/developer/scheduler) - Deep dive into scheduling
+- [Memory Management](/developer/memory-management) - Memory system details
+- [Kernel Development](/developer/kernel-development) - Writing custom kernels

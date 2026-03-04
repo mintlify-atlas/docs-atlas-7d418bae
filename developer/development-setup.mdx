@@ -1,0 +1,366 @@
+---
+title: Development Setup
+description: Setting up your development environment for SGLang
+---
+
+# Development Setup
+
+This guide covers setting up a development environment for SGLang, including Docker-based and local setups.
+
+## Prerequisites
+
+- Python 3.8+
+- CUDA 11.8+ (for GPU support)
+- Docker (optional, for containerized development)
+- Git
+
+## Option 1: Local Development
+
+### Clone Repository
+
+```bash
+git clone https://github.com/<your_username>/sglang.git
+cd sglang
+```
+
+### Install Dependencies
+
+```bash
+# Create virtual environment (recommended)
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install SGLang in editable mode
+pip install -e ".[all]"
+
+# Install development tools
+pip install pre-commit pytest
+
+# Set up pre-commit hooks
+pre-commit install
+```
+
+### Install Kernels
+
+```bash
+# FlashInfer (for attention kernels)
+pip install flashinfer -i https://flashinfer.ai/whl/cu121/torch2.4/
+
+# SGLang kernels
+pip install sgl-kernel
+```
+
+### Verify Installation
+
+```bash
+# Run a simple test
+python -c "import sglang; print(sglang.__version__)"
+
+# Launch a server
+python -m sglang.launch_server --model-path meta-llama/Llama-3.2-1B --host 127.0.0.1 --port 30000
+```
+
+## Option 2: Docker Development
+
+### Using VSCode Dev Containers (Recommended)
+
+SGLang includes a `.devcontainer` configuration for seamless Docker-based development.
+
+#### Setup Steps
+
+1. Install [VSCode](https://code.visualstudio.com/) and the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+
+2. Open the repository in VSCode:
+   ```bash
+   code /path/to/sglang
+   ```
+
+3. Press `F1`, type "Dev Containers: Reopen in Container", and press Enter
+
+4. VSCode will build the container and install all dependencies automatically
+
+Once the container is ready, you'll see "Dev Container" in the status bar. All development happens inside the container with your local changes synced automatically.
+
+#### Running the Server in Dev Container
+
+```bash
+# Inside VSCode terminal (already in container)
+python -m sglang.launch_server --model-path meta-llama/Llama-3.2-1B
+```
+
+### Manual Docker Setup
+
+For manual Docker container management:
+
+```bash
+# Pull the dev image
+docker pull lmsysorg/sglang:dev
+
+# Run with GPU support and volume mounts
+docker run -itd \
+  --shm-size 32g \
+  --gpus all \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -v $(pwd):/sgl-workspace/sglang \
+  --ipc=host \
+  --network=host \
+  --privileged \
+  --name sglang_dev \
+  lmsysorg/sglang:dev /bin/zsh
+
+# Enter the container
+docker exec -it sglang_dev /bin/zsh
+```
+
+#### Volume Mounts Explained
+
+- **`~/.cache/huggingface`**: Avoids re-downloading models on container restart
+- **`$(pwd)`**: Syncs your local code changes to the container
+- **`--network=host`**: Required for RDMA (can be omitted if RDMA is not needed)
+- **`--privileged`**: Required for RDMA (can be omitted if RDMA is not needed)
+
+<Note>
+**RDMA Note**: If using RoCE, you may need to set `export NCCL_IB_GID_INDEX=3` inside the container.
+</Note>
+
+## Option 3: Remote Development
+
+### VSCode Remote Tunnels
+
+Develop on a remote machine using VSCode Remote Tunnels:
+
+#### On Remote Host
+
+```bash
+# Download VSCode CLI
+wget https://vscode.download.prss.microsoft.com/dbazure/download/stable/fabdb6a30b49f79a7aba0f2ad9df9b399473380f/vscode_cli_alpine_x64_cli.tar.gz
+tar xf vscode_cli_alpine_x64_cli.tar.gz
+
+# Start tunnel
+./code tunnel
+```
+
+#### On Local Machine
+
+1. Press `F1` in VSCode
+2. Select "Remote Tunnels: Connect to Tunnel"
+3. Sign in and select your remote host
+
+You can now edit code locally while it runs on the remote machine.
+
+## Debugging with VSCode
+
+### Configure Launch Settings
+
+Create or edit `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python Debugger: launch_server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "sglang.launch_server",
+      "console": "integratedTerminal",
+      "args": [
+        "--model-path", "meta-llama/Llama-3.2-1B",
+        "--host", "0.0.0.0",
+        "--port", "30000",
+        "--trust-remote-code"
+      ],
+      "justMyCode": false
+    }
+  ]
+}
+```
+
+### Start Debugging
+
+1. Set breakpoints in the code
+2. Press `F5` to start debugging
+3. The debugger will pause at breakpoints, even in remote/container environments
+
+## Testing
+
+### Run Unit Tests
+
+```bash
+# Run all tests
+pytest test/
+
+# Run specific test file
+pytest test/srt/test_engine.py
+
+# Run specific test
+pytest test/srt/test_engine.py::TestEngine::test_basic
+
+# Run with verbose output
+pytest -v test/srt/
+
+# Run with coverage
+pytest --cov=sglang test/
+```
+
+### Run Integration Tests
+
+```bash
+# Launch server first
+python -m sglang.launch_server --model-path meta-llama/Llama-3.2-1B
+
+# In another terminal, run integration tests
+pytest test/srt/test_integration.py
+```
+
+## Profiling
+
+### PyTorch Profiler
+
+```bash
+# Set output directory
+export SGLANG_TORCH_PROFILER_DIR=/tmp/sglang_profiles
+
+# Launch server
+python -m sglang.launch_server --model-path meta-llama/Llama-3.2-1B
+
+# In another terminal, run benchmark with profiling
+python -m sglang.bench_serving \
+  --backend sglang \
+  --num-prompts 10 \
+  --profile
+
+# View trace at https://ui.perfetto.dev/
+```
+
+### Nsight Systems
+
+```bash
+# Profile one batch
+nsys profile \
+  --trace-fork-before-exec=true \
+  --cuda-graph-trace=node \
+  python -m sglang.bench_one_batch \
+    --model meta-llama/Llama-3.2-1B \
+    --batch-size 32 \
+    --input-len 256 \
+    --output-len 32
+
+# View with nsight-sys GUI
+nsys-ui report.nsys-rep
+```
+
+For more profiling details, see [Benchmark and Profiling](/developer/benchmark-profiling).
+
+## Environment Variables
+
+Common environment variables for development:
+
+```bash
+# Enable debug logging
+export SGLANG_LOG_LEVEL=debug
+
+# Torch profiler output directory
+export SGLANG_TORCH_PROFILER_DIR=/tmp/profiles
+
+# Disable CUDA graphs (for easier debugging)
+export SGLANG_DISABLE_CUDA_GRAPH=1
+
+# Health check timeout (seconds)
+export SGLANG_HEALTH_CHECK_TIMEOUT=60
+
+# Custom model cache directory
+export HF_HOME=/path/to/cache
+```
+
+## Common Development Tasks
+
+### Format Code
+
+```bash
+pre-commit run --all-files
+```
+
+### Run Linters
+
+```bash
+# Flake8
+flake8 python/sglang/
+
+# Black
+black --check python/sglang/
+
+# isort
+isort --check-only python/sglang/
+```
+
+### Build Documentation
+
+```bash
+cd docs
+pip install -r requirements.txt
+mint dev  # Preview at http://localhost:3000
+```
+
+### Update Dependencies
+
+```bash
+# Update all dependencies
+pip install -e ".[all]" --upgrade
+
+# Update specific dependency
+pip install --upgrade sgl-kernel
+```
+
+## Troubleshooting
+
+### Out of Memory
+
+```bash
+# Reduce memory usage
+python -m sglang.launch_server \
+  --model-path meta-llama/Llama-3.2-1B \
+  --mem-fraction-static 0.7
+```
+
+### CUDA Errors
+
+```bash
+# Check CUDA availability
+python -c "import torch; print(torch.cuda.is_available())"
+
+# Check GPU memory
+nvidia-smi
+```
+
+### Import Errors
+
+```bash
+# Reinstall in editable mode
+pip uninstall sglang
+pip install -e ".[all]"
+```
+
+### Pre-commit Failures
+
+```bash
+# Auto-fix formatting issues
+pre-commit run --all-files
+
+# If still failing, manually fix and run again
+pre-commit run --all-files
+```
+
+## Next Steps
+
+- [Contribution Guide](/developer/contribution-guide) - How to contribute code
+- [Architecture Overview](/developer/architecture-overview) - Understanding SGLang's architecture
+- [Adding Models](/developer/adding-models) - How to add support for new models
+- [Testing](/developer/testing) - Testing guidelines
+
+## Resources
+
+- [GitHub Repository](https://github.com/sgl-project/sglang)
+- [Docker Hub](https://hub.docker.com/r/lmsysorg/sglang)
+- [Slack Community](https://slack.sglang.io)
+- [VSCode Dev Containers Documentation](https://code.visualstudio.com/docs/devcontainers/containers)
